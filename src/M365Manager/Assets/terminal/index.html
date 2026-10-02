@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Terminal</title>
+<link rel="stylesheet" href="xterm.css">
+<style>
+  :root { --bg: #1c1c1f; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
+  #term { position: absolute; top: 6px; right: 2px; bottom: 2px; left: 10px; }
+  .xterm .xterm-viewport { scrollbar-width: thin; scrollbar-color: rgba(128,128,128,.45) transparent; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script>
+(() => {
+  const themes = {
+    dark: {
+      background: '#1c1c1f', foreground: '#e4e4e7', cursor: '#e4e4e7', cursorAccent: '#1c1c1f',
+      selectionBackground: '#3a5a8c', black: '#1c1c1f', red: '#f1707b', green: '#6ccb5f', yellow: '#f5c451',
+      blue: '#5ea0ef', magenta: '#c586f0', cyan: '#4fc1c9', white: '#d4d4d8', brightBlack: '#7a7a85',
+      brightRed: '#ff8a93', brightGreen: '#8ee07f', brightYellow: '#ffd77a', brightBlue: '#82b8ff',
+      brightMagenta: '#d7a6ff', brightCyan: '#74dde4', brightWhite: '#ffffff'
+    },
+    light: {
+      background: '#fbfbfc', foreground: '#1f1f23', cursor: '#1f1f23', cursorAccent: '#fbfbfc',
+      selectionBackground: '#b9d3f5', black: '#1f1f23', red: '#c42b1c', green: '#0f7b0f', yellow: '#9d5d00',
+      blue: '#0f6cbd', magenta: '#8764b8', cyan: '#038387', white: '#6b6b75', brightBlack: '#6b6b75',
+      brightRed: '#d13438', brightGreen: '#13a10e', brightYellow: '#b17c00', brightBlue: '#2886de',
+      brightMagenta: '#a371d6', brightCyan: '#00a3a8', brightWhite: '#1f1f23'
+    }
+  };
+
+  const term = new Terminal({
+    fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace',
+    fontSize: 13,
+    lineHeight: 1.18,
+    cursorBlink: true,
+    cursorStyle: 'bar',
+    scrollback: 20000,
+    allowProposedApi: true,
+    theme: themes.dark
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById('term'));
+
+  const post = m => window.chrome.webview.postMessage(m);
+  let last = '';
+  const doFit = () => {
+    try { fit.fit(); } catch { }
+    const key = term.cols + 'x' + term.rows;
+    if (key !== last) { last = key; post({ t: 'r', cols: term.cols, rows: term.rows }); }
+  };
+  new ResizeObserver(() => requestAnimationFrame(doFit)).observe(document.body);
+
+  term.onData(d => post({ t: 'i', d }));
+
+  const copySelection = () => {
+    if (!term.hasSelection()) return false;
+    navigator.clipboard.writeText(term.getSelection());
+    term.clearSelection();
+    return true;
+  };
+
+  // Strg+C kopiert bei Auswahl, sonst Abbruch. Strg+V fügt ein (über das Browser-Paste-Event).
+  term.attachCustomKeyEventHandler(e => {
+    if (e.type !== 'keydown') return true;
+    const k = e.key.toLowerCase();
+    if (e.ctrlKey && k === 'c' && (e.shiftKey || term.hasSelection())) { copySelection(); e.preventDefault(); return false; }
+    if (e.ctrlKey && k === 'v') return false;
+    if (e.ctrlKey && (e.key === '+' || e.key === '=')) { setFont(term.options.fontSize + 1); e.preventDefault(); return false; }
+    if (e.ctrlKey && e.key === '-') { setFont(term.options.fontSize - 1); e.preventDefault(); return false; }
+    if (e.ctrlKey && e.key === '0') { setFont(13); e.preventDefault(); return false; }
+    return true;
+  });
+
+  // Rechtsklick: Auswahl kopieren, sonst einfügen (wie Windows Terminal).
+  document.addEventListener('contextmenu', async e => {
+    e.preventDefault();
+    if (copySelection()) return;
+    try { const text = await navigator.clipboard.readText(); if (text) term.paste(text); } catch { }
+    term.focus();
+  });
+
+  function setFont(size) {
+    term.options.fontSize = Math.max(8, Math.min(28, size));
+    doFit();
+  }
+
+  function setTheme(name) {
+    const t = themes[name] || themes.dark;
+    term.options.theme = t;
+    document.documentElement.style.setProperty('--bg', t.background);
+  }
+
+  window.chrome.webview.addEventListener('message', e => {
+    const m = e.data;
+    switch (m.t) {
+      case 'o': term.write(m.d); break;
+      case 'theme': setTheme(m.name); break;
+      case 'focus': term.focus(); break;
+      case 'reset': term.reset(); break;
+    }
+  });
+
+  requestAnimationFrame(() => {
+    doFit();
+    post({ t: 'ready', cols: term.cols, rows: term.rows });
+    term.focus();
+  });
+})();
+</script>
+</body>
+</html>

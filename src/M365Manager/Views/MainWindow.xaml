@@ -1,0 +1,285 @@
+<ui:FluentWindow x:Class="M365Manager.Views.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="M365 Manager" Width="1500" Height="940" MinWidth="980" MinHeight="620"
+                 WindowStartupLocation="CenterScreen"
+                 ExtendsContentIntoTitleBar="True" WindowBackdropType="Mica" WindowCornerPreference="Round">
+    <ui:FluentWindow.Resources>
+
+        <!-- Browser-Tab -->
+        <DataTemplate x:Key="BrowserTabTemplate">
+            <Border x:Name="TabBorder" Margin="0,0,4,0" Padding="10,0,4,0" Height="32" CornerRadius="6"
+                    MinWidth="110" MaxWidth="230" Background="Transparent" Cursor="Hand" ToolTip="{Binding Url}"
+                    MouseLeftButtonDown="Tab_MouseDown" MouseUp="Tab_MouseUp">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ui:SymbolIcon x:Name="FallbackIcon" Symbol="Globe16" FontSize="14" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <Image x:Name="Favicon" Source="{Binding Icon}" Width="16" Height="16" VerticalAlignment="Center"
+                           RenderOptions.BitmapScalingMode="HighQuality" />
+                    <TextBlock Grid.Column="1" Text="{Binding Title}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                               Margin="8,0,4,0" FontSize="12.5" />
+                    <Button Grid.Column="2" Style="{StaticResource GhostButton}" Click="TabClose_Click" ToolTip="Tab schließen (Strg+W)"
+                            Width="22" Height="22" Padding="0">
+                        <ui:SymbolIcon Symbol="Dismiss12" FontSize="11" />
+                    </Button>
+                </Grid>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
+                    <Setter TargetName="Favicon" Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+                <Trigger SourceName="TabBorder" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                </Trigger>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- Terminal-Tab -->
+        <DataTemplate x:Key="TerminalTabTemplate">
+            <Border x:Name="TabBorder" Margin="0,0,4,0" Padding="10,0,4,0" Height="26" CornerRadius="5" Background="Transparent"
+                    Cursor="Hand" MouseLeftButtonDown="TerminalTab_MouseDown">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding Title}" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <Button Style="{StaticResource GhostButton}" Click="TerminalClose_Click" ToolTip="Terminal schließen"
+                            Width="20" Height="20" Padding="0">
+                        <ui:SymbolIcon Symbol="Dismiss12" FontSize="10" />
+                    </Button>
+                </StackPanel>
+            </Border>
+            <DataTemplate.Triggers>
+                <Trigger SourceName="TabBorder" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                </Trigger>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- Dienst-Chip -->
+        <DataTemplate x:Key="ChipTemplate">
+            <Button Style="{StaticResource ChipButton}" Click="Chip_Click" ToolTip="{Binding ToolTip}">
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse Width="7" Height="7" Fill="{Binding DotBrush}" Margin="0,1,7,0" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding Label}" FontSize="12" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+        </DataTemplate>
+    </ui:FluentWindow.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar x:Name="AppTitleBar" Grid.Row="0" Title="M365 Manager" />
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="236" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- ============================== Seitenleiste ============================== -->
+            <DockPanel Grid.Column="0" Margin="10,0,8,10">
+
+                <!-- Profil -->
+                <Button x:Name="ProfileButton" DockPanel.Dock="Top" Style="{StaticResource NavButton}" Padding="8" Margin="0,0,0,6"
+                        Click="ProfileButton_Click" ToolTip="Profil-Menü">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="36" />
+                            <ColumnDefinition Width="10" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid Width="36" Height="36">
+                            <Ellipse x:Name="AvatarEllipse" />
+                            <TextBlock x:Name="AvatarText" Foreground="White" FontWeight="SemiBold" FontSize="13"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Grid>
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                            <TextBlock x:Name="ProfileNameText" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="ProfileUpnText" FontSize="11" TextTrimming="CharacterEllipsis"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <ui:SymbolIcon Grid.Column="3" Symbol="ChevronDown16" FontSize="12" Margin="4,0,0,0"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    </Grid>
+                    <Button.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="Profil bearbeiten …" Click="EditProfile_Click">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="Edit20" /></MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="Anderes Profil öffnen …" Click="SwitchProfile_Click">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="ArrowSwap20" /></MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="Desktop-Verknüpfung erstellen" Click="CreateShortcut_Click">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="Link20" /></MenuItem.Icon>
+                            </MenuItem>
+                            <Separator />
+                            <MenuItem Header="Browser-Anmeldung zurücksetzen …" Click="ResetBrowser_Click">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="Eraser20" /></MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="Datenordner öffnen" Click="OpenDataFolder_Click">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="FolderOpen20" /></MenuItem.Icon>
+                            </MenuItem>
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
+
+                <!-- Unten -->
+                <StackPanel DockPanel.Dock="Bottom">
+                    <Separator Margin="4,6,4,6" />
+                    <Button Style="{StaticResource NavButton}" Click="ToggleTerminal_Click" ToolTip="Terminal ein-/ausblenden (Strg+Ö)">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="WindowConsole20" FontSize="18" />
+                            <TextBlock x:Name="ToggleTerminalText" Text="Terminal ausblenden" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource NavButton}" Click="SwitchProfile_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="ArrowSwap20" FontSize="18" />
+                            <TextBlock Text="Profil wechseln" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <TextBlock DockPanel.Dock="Top" Text="PORTALE" Style="{StaticResource SectionLabel}" />
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="PortalPanel" />
+                </ScrollViewer>
+            </DockPanel>
+
+            <!-- ============================== Arbeitsbereich ============================== -->
+            <Border Grid.Column="1" Margin="0,0,10,10" CornerRadius="8" BorderThickness="1"
+                    Background="{DynamicResource LayerFillColorDefaultBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+                <Grid x:Name="WorkArea">
+
+                    <!-- Browser -->
+                    <Grid x:Name="BrowserPane">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Tab-Leiste -->
+                        <DockPanel Grid.Row="0" Margin="8,8,8,0">
+                            <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Width="30" Height="30" VerticalAlignment="Center"
+                                    Click="NewTab_Click" ToolTip="Neuer Tab (Strg+T)">
+                                <ui:SymbolIcon Symbol="Add20" FontSize="16" />
+                            </Button>
+                            <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                                          PreviewMouseWheel="TabScroller_PreviewMouseWheel">
+                                <StackPanel Orientation="Horizontal">
+                                    <ItemsControl x:Name="BrowserTabs" ItemTemplate="{StaticResource BrowserTabTemplate}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </DockPanel>
+
+                        <!-- Navigationsleiste -->
+                        <Grid Grid.Row="1" Margin="8,6,8,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="BackButton" Style="{StaticResource GhostButton}" Width="32" Height="32" Click="Back_Click" ToolTip="Zurück (Alt+←)">
+                                <ui:SymbolIcon Symbol="ArrowLeft20" FontSize="16" />
+                            </Button>
+                            <Button x:Name="ForwardButton" Grid.Column="1" Style="{StaticResource GhostButton}" Width="32" Height="32" Click="Forward_Click" ToolTip="Vor (Alt+→)">
+                                <ui:SymbolIcon Symbol="ArrowRight20" FontSize="16" />
+                            </Button>
+                            <Button x:Name="ReloadButton" Grid.Column="2" Style="{StaticResource GhostButton}" Width="32" Height="32" Click="Reload_Click" ToolTip="Neu laden (F5)">
+                                <ui:SymbolIcon x:Name="ReloadIcon" Symbol="ArrowClockwise20" FontSize="16" />
+                            </Button>
+                            <ui:TextBox x:Name="UrlBox" Grid.Column="3" Margin="6,0,6,0" Padding="10,5" FontSize="12.5"
+                                        Icon="{ui:SymbolIcon LockClosed20}" ClearButtonEnabled="False"
+                                        PlaceholderText="Adresse eingeben" KeyDown="UrlBox_KeyDown" GotKeyboardFocus="UrlBox_GotFocus" />
+                            <Button Grid.Column="4" Style="{StaticResource GhostButton}" Width="32" Height="32" Click="CopyUrl_Click" ToolTip="Link kopieren">
+                                <ui:SymbolIcon Symbol="Copy20" FontSize="16" />
+                            </Button>
+                        </Grid>
+
+                        <ProgressBar x:Name="LoadingBar" Grid.Row="2" Height="2" IsIndeterminate="True" Visibility="Hidden" Margin="8,0" />
+
+                        <Grid x:Name="BrowserHost" Grid.Row="3" Margin="1,2,1,1" />
+
+                        <StackPanel x:Name="BrowserEmpty" Grid.Row="3" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed">
+                            <ui:SymbolIcon Symbol="Globe24" FontSize="44" HorizontalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                            <TextBlock Text="Kein Tab geöffnet" FontSize="17" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,12,0,4" />
+                            <TextBlock Text="Wähle links ein Portal oder öffne mit Strg+T einen neuen Tab." HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <GridSplitter x:Name="Splitter" Background="Transparent" ResizeBehavior="PreviousAndNext" ShowsPreview="False" Focusable="False" />
+
+                    <!-- Terminal -->
+                    <Grid x:Name="TerminalPane">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Border x:Name="TerminalHeader" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" Padding="10,6,6,6">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <ui:SymbolIcon Symbol="WindowConsole20" FontSize="16" Margin="0,0,8,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <ItemsControl x:Name="TerminalTabs" ItemTemplate="{StaticResource TerminalTabTemplate}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                    </ItemsControl>
+                                </StackPanel>
+                                <ItemsControl x:Name="ServiceChips" Grid.Column="1" ItemTemplate="{StaticResource ChipTemplate}"
+                                              Margin="14,0,8,0" VerticalAlignment="Center">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate><WrapPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                </ItemsControl>
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button Style="{StaticResource GhostButton}" Width="28" Height="28" Click="NewTerminal_Click" ToolTip="Weiteres Terminal">
+                                        <ui:SymbolIcon Symbol="Add20" FontSize="15" />
+                                    </Button>
+                                    <Button Style="{StaticResource GhostButton}" Width="28" Height="28" Click="RestartTerminal_Click" ToolTip="Sitzung neu starten">
+                                        <ui:SymbolIcon Symbol="ArrowClockwise20" FontSize="15" />
+                                    </Button>
+                                    <Button Style="{StaticResource GhostButton}" Width="28" Height="28" Click="ToggleLayout_Click" ToolTip="Terminal unten / rechts">
+                                        <ui:SymbolIcon x:Name="LayoutIcon" Symbol="PanelRight20" FontSize="15" />
+                                    </Button>
+                                    <Button Style="{StaticResource GhostButton}" Width="28" Height="28" Click="ToggleTerminal_Click" ToolTip="Ausblenden (Strg+Ö)">
+                                        <ui:SymbolIcon Symbol="Dismiss20" FontSize="15" />
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Grid x:Name="TerminalHost" Grid.Row="1" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

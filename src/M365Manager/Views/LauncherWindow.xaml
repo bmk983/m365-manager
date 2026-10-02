@@ -1,0 +1,206 @@
+<ui:FluentWindow x:Class="M365Manager.Views.LauncherWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="M365 Manager" Width="1060" Height="700" MinWidth="860" MinHeight="580"
+                 WindowStartupLocation="CenterScreen"
+                 ExtendsContentIntoTitleBar="True" WindowBackdropType="Mica" WindowCornerPreference="Round">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="M365 Manager" ShowMaximize="True" />
+
+        <Grid Grid.Row="1" Margin="36,6,36,28">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="28" />
+                <ColumnDefinition Width="370" />
+            </Grid.ColumnDefinitions>
+
+            <!-- ============================== Profile ============================== -->
+            <DockPanel Grid.Column="0">
+                <StackPanel DockPanel.Dock="Top" Margin="0,0,0,22">
+                    <TextBlock Text="Admin-Profile" FontSize="28" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               Text="Jedes Profil hat eine eigene Browser-Anmeldung und eine eigene PowerShell-Sitzung. Kein Kontowechsel mehr in Edge." />
+                </StackPanel>
+
+                <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                    <TextBlock x:Name="ProfileCountText" VerticalAlignment="Center" Style="{StaticResource SectionLabel}" Margin="2,0,0,0" />
+                    <ui:Button HorizontalAlignment="Right" Appearance="Primary" Content="Neues Profil"
+                               Icon="{ui:SymbolIcon Add20}" Click="NewProfile_Click" />
+                </Grid>
+
+                <Grid>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+                        <ItemsControl x:Name="ProfileList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border x:Name="Card" Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="14,12" Cursor="Hand"
+                                            MouseLeftButtonUp="Card_Click">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="44" />
+                                                <ColumnDefinition Width="14" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid Width="44" Height="44">
+                                                <Ellipse Fill="{Binding ColorBrush}" />
+                                                <TextBlock Text="{Binding Initials}" Foreground="White" FontWeight="SemiBold" FontSize="15"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Grid>
+                                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding Subtitle}" FontSize="12" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
+                                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                <TextBlock Text="{Binding LastUsedText}" FontSize="11" Margin="0,2,0,0"
+                                                           Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <ui:Button Appearance="Transparent" Icon="{ui:SymbolIcon Edit20}" ToolTip="Bearbeiten"
+                                                           Padding="8" Margin="0,0,2,0" Click="Edit_Click" />
+                                                <ui:Button Appearance="Transparent" Icon="{ui:SymbolIcon Delete20}" ToolTip="Löschen"
+                                                           Padding="8" Margin="0,0,8,0" Click="Delete_Click" />
+                                                <ui:Button Appearance="Primary" Content="Öffnen" Icon="{ui:SymbolIcon Open20}" Click="Open_Click" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                    <DataTemplate.Triggers>
+                                        <Trigger SourceName="Card" Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Card" Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}" />
+                                        </Trigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <StackPanel x:Name="EmptyState" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed" Margin="0,0,0,60">
+                        <ui:SymbolIcon Symbol="PersonAdd20" FontSize="44" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                        <TextBlock Text="Noch kein Profil" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,12,0,4" />
+                        <TextBlock Text="Lege rechts dein erstes Admin-Profil an." HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </Grid>
+            </DockPanel>
+
+            <!-- ============================== Rechte Spalte ============================== -->
+            <Grid Grid.Column="2">
+
+                <!-- Umgebung -->
+                <Border x:Name="EnvCard" Style="{StaticResource CardBorder}" Padding="20" VerticalAlignment="Top">
+                    <StackPanel>
+                        <TextBlock Text="Umgebung" FontSize="17" FontWeight="SemiBold" />
+                        <TextBlock Text="Portabel – nichts wird installiert." FontSize="12" Margin="0,2,0,14"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <ui:SymbolIcon x:Name="PwshIcon" Symbol="CheckmarkCircle20" FontSize="20" Margin="0,0,10,0" />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="PowerShell 7" FontWeight="SemiBold" />
+                                <TextBlock x:Name="PwshText" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <ui:SymbolIcon x:Name="ModulesIcon" Symbol="CheckmarkCircle20" FontSize="20" Margin="0,0,10,0" />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="M365-Module" FontWeight="SemiBold" />
+                                <TextBlock x:Name="ModulesText" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Margin="0,0,0,14">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ui:SymbolIcon Symbol="Folder20" FontSize="20" Margin="0,0,10,0" />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock x:Name="DataTitle" Text="Datenordner" FontWeight="SemiBold" />
+                                <TextBlock x:Name="DataText" FontSize="12" TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ui:Button Grid.Column="2" Appearance="Transparent" Icon="{ui:SymbolIcon FolderOpen20}" Padding="8"
+                                       ToolTip="Ordner öffnen" Click="OpenDataFolder_Click" />
+                        </Grid>
+
+                        <ProgressBar x:Name="SetupProgress" IsIndeterminate="True" Height="3" Margin="0,0,0,12" Visibility="Collapsed" />
+
+                        <ui:Button x:Name="SetupButton" HorizontalAlignment="Stretch" Content="Einrichten"
+                                   Icon="{ui:SymbolIcon ArrowDownload20}" Click="Setup_Click" />
+
+                        <Expander x:Name="LogExpander" Header="Protokoll" Margin="0,12,0,0">
+                            <TextBox x:Name="LogBox" Height="200" IsReadOnly="True" TextWrapping="NoWrap" FontSize="11"
+                                     FontFamily="{StaticResource MonoFont}" VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Auto" Margin="0,6,0,0" />
+                        </Expander>
+                    </StackPanel>
+                </Border>
+
+                <!-- Profil-Editor -->
+                <Border x:Name="EditorCard" Style="{StaticResource CardBorder}" Padding="20,18" Visibility="Collapsed">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                            <ui:Button Content="Abbrechen" Margin="0,0,8,0" Click="CancelEdit_Click" />
+                            <ui:Button x:Name="SaveButton" Appearance="Primary" Content="Speichern" Icon="{ui:SymbolIcon Checkmark20}"
+                                       Click="Save_Click" IsDefault="True" />
+                        </StackPanel>
+                        <TextBlock x:Name="EditorError" DockPanel.Dock="Bottom" Foreground="{DynamicResource SystemFillColorCriticalBrush}"
+                                   TextWrapping="Wrap" Margin="0,10,0,0" Visibility="Collapsed" />
+
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock x:Name="EditorTitle" Text="Neues Profil" FontSize="17" FontWeight="SemiBold" />
+
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Anzeigename" />
+                                <ui:TextBox x:Name="NameBox" PlaceholderText="z. B. Contoso Produktion" />
+
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Admin-Konto (UPN)" />
+                                <ui:TextBox x:Name="UpnBox" PlaceholderText="admin@contoso.onmicrosoft.com" />
+                                <TextBlock FontSize="11" Margin="2,5,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                           Text="Wird bei der Anmeldung im Browser und in PowerShell vorausgefüllt. Kennwort und MFA gibst du nur bei Microsoft ein." />
+
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Farbe" />
+                                <WrapPanel x:Name="ColorPanel" />
+
+                                <Expander Header="Erweitert" Margin="0,16,0,0">
+                                    <StackPanel Margin="0,0,0,4">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Tenant (optional)" Margin="0,4,0,5" />
+                                        <ui:TextBox x:Name="TenantBox" PlaceholderText="automatisch aus dem UPN" />
+
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="SharePoint-Tenantname (optional)" />
+                                        <ui:TextBox x:Name="SharePointBox" PlaceholderText="z. B. contoso  →  contoso-admin.sharepoint.com" />
+
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="PnP ClientId (optional)" />
+                                        <ui:TextBox x:Name="PnPBox" PlaceholderText="wird beim ersten PnP-Befehl angelegt" />
+
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Graph-Berechtigungen (Scopes)" />
+                                        <ui:TextBox x:Name="ScopesBox" TextWrapping="Wrap" AcceptsReturn="False" MinHeight="70"
+                                                    VerticalContentAlignment="Top" FontSize="12" />
+                                        <ui:HyperlinkButton Content="Standard wiederherstellen" Padding="0" Margin="0,4,0,0" Click="ResetScopes_Click" />
+                                    </StackPanel>
+                                </Expander>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>
