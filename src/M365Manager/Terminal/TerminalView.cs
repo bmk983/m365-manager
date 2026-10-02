@@ -36,6 +36,9 @@ public sealed class TerminalView : Grid, IDisposable
     public event Action<TerminalView>? StatesChanged;
     public event Action<string, string>? ProfileValueReported;
 
+    /// <summary>Liefert Tokens aus der Browser-Sitzung des Profils (Dienst, zusätzliche Scopes).</summary>
+    public Func<string, string?, Task<TokenResult>>? TokenProvider { get; set; }
+
     public TerminalView(Func<AdminProfile> profile, int number, bool dark)
     {
         _profile = profile;
@@ -152,7 +155,7 @@ public sealed class TerminalView : Grid, IDisposable
             }
 
             var profile = _profile();
-            _pipe = new PipeListener(line => Dispatcher.BeginInvoke(() => OnHostMessage(line)));
+            _pipe = new PipeListener(line => Dispatcher.BeginInvoke(() => OnHostMessage(line)), HandleRequestAsync);
 
             var bootstrap = Path.Combine(AppPaths.ScriptsDir, "bootstrap.ps1").Replace("'", "''");
             var commandLine = "\"" + pwsh + "\" -NoLogo -NoProfile -NoExit -ExecutionPolicy RemoteSigned -Command \". '" + bootstrap + "'\"";
@@ -250,6 +253,17 @@ public sealed class TerminalView : Grid, IDisposable
         Flush();
         WriteLocal("\r\n\x1b[90m[PowerShell beendet (Code " + code + ") · Enter startet eine neue Sitzung]\x1b[0m\r\n");
         _awaitingRestart = true;
+    }
+
+    /// <summary>Anfrage aus PowerShell, z. B. "token" + Dienst. Antwort: Token|Ablauf (Unix-Sekunden).</summary>
+    private async Task<string> HandleRequestAsync(string kind, string[] args)
+    {
+        if (kind != "token" || args.Length == 0) throw new InvalidOperationException("Unbekannte Anfrage.");
+        var provider = TokenProvider ?? throw new InvalidOperationException("Keine Token-Quelle.");
+        var extra = args.Length > 1 ? args[1] : null;
+        // WebView2 und Fenster gehören auf den UI-Thread.
+        var token = await Dispatcher.InvokeAsync(() => provider(args[0], extra)).Task.Unwrap();
+        return token.AccessToken + "|" + token.ExpiresOn.ToUnixTimeSeconds();
     }
 
     private void OnHostMessage(string line)

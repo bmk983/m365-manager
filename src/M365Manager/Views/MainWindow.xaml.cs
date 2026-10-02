@@ -40,12 +40,14 @@ public partial class MainWindow : FluentWindow
     private ColumnDefinition? _terminalColumn;
     private int _terminalCounter;
     private bool _closed;
+    private readonly TokenBroker _tokens;
 
     public string ProfileId => _profile.Id;
 
     public MainWindow(AdminProfile profile)
     {
         _profile = profile;
+        _tokens = new TokenBroker(() => _profile, this);
         InitializeComponent();
         SystemThemeWatcher.Watch(this);
 
@@ -179,6 +181,7 @@ public partial class MainWindow : FluentWindow
             core = tab.View.CoreWebView2;
         }
         if (core is not null) await core.Profile.ClearBrowsingDataAsync();
+        _tokens.Clear();
 
         foreach (var tab in _tabs.ToList()) CloseTab(tab);
         await OpenPortalAsync(Portal.All[0], forceNewTab: true);
@@ -488,6 +491,7 @@ public partial class MainWindow : FluentWindow
             if (_activeTerminal?.View == v) RefreshChips();
         };
         view.ProfileValueReported += OnProfileValueReported;
+        view.TokenProvider = (service, extraScopes) => _tokens.GetAsync(service, extraScopes);
         TerminalHost.Children.Add(view);
 
         var tab = new TerminalTab(view);

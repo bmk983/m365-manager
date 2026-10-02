@@ -25,6 +25,8 @@ $global:M365 = @{
     Tried       = @{}
     Busy        = $false
     AutoConnect = $true
+    TokenMode   = $true
+    Expiry      = @{}
     Verbs       = @(Get-Verb | ForEach-Object Verb)
 }
 
@@ -43,15 +45,21 @@ $global:M365Patterns = @{
 
 # ------------------------------------------------------------------ Rückkanal zur App
 
+function Open-M365Channel {
+    if ($global:M365Pipe -and $global:M365Pipe.IsConnected) { return }
+    $global:M365Pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', $env:M365M_PIPE, [System.IO.Pipes.PipeDirection]::InOut)
+    $global:M365Pipe.Connect(3000)
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $global:M365PipeWriter = [System.IO.StreamWriter]::new($global:M365Pipe, $utf8)
+    $global:M365PipeWriter.AutoFlush = $true
+    $global:M365PipeReader = [System.IO.StreamReader]::new($global:M365Pipe, $utf8)
+    $global:M365PendingRead = $null
+}
+
 function Send-M365Host([string]$Message) {
     if (-not $env:M365M_PIPE) { return }
     try {
-        if (-not $global:M365Pipe -or -not $global:M365Pipe.IsConnected) {
-            $global:M365Pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', $env:M365M_PIPE, [System.IO.Pipes.PipeDirection]::Out)
-            $global:M365Pipe.Connect(2000)
-            $global:M365PipeWriter = [System.IO.StreamWriter]::new($global:M365Pipe, [System.Text.UTF8Encoding]::new($false))
-            $global:M365PipeWriter.AutoFlush = $true
-        }
+        Open-M365Channel
         $global:M365PipeWriter.WriteLine($Message)
     }
     catch {
@@ -59,6 +67,37 @@ function Send-M365Host([string]$Message) {
     }
 }
 
+function Get-M365Token {
+    <#
+    .SYNOPSIS
+        Holt ein Token aus der Browser-Anmeldung dieses Profils (ohne erneute Anmeldung / MFA, solange der Browser angemeldet ist).
+    #>
+    param(
+        [Parameter(Mandatory)][ValidateSet('Graph', 'Exchange', 'Purview', 'Teams', 'TeamsGraph', 'SharePoint')][string]$Service,
+        [string[]]$ExtraScopes
+    )
+    if (-not $env:M365M_PIPE) { throw 'Kein Kanal zur App vorhanden.' }
+    Open-M365Channel
+    $id = [guid]::NewGuid().ToString('N')
+    $global:M365PipeWriter.WriteLine("req|$id|token|$Service|$(($ExtraScopes -join ' ') -replace '\|', '')")
+
+    while ($true) {
+        # Lesen in kleinen Schritten, damit Strg+C wirkt. Eine offene Leseoperation wird wiederverwendet.
+        if (-not $global:M365PendingRead) { $global:M365PendingRead = $global:M365PipeReader.ReadLineAsync() }
+        while (-not $global:M365PendingRead.Wait(200)) { }
+        $line = $global:M365PendingRead.Result
+        $global:M365PendingRead = $null
+        if ($null -eq $line) { $global:M365Pipe = $null; throw 'Kanal zur App wurde getrennt.' }
+
+        $parts = $line.Split('|', 5)
+        if ($parts[0] -ne 'res' -or $parts[1] -ne $id) { continue }
+        if ($parts[2] -ne 'ok') { throw $parts[3] }
+        return [pscustomobject]@{
+            Token     = $parts[3]
+            ExpiresOn = [DateTimeOffset]::FromUnixTimeSeconds([long]$parts[4])
+        }
+    }
+}
 function Set-M365State([string]$Service, [string]$State, [string]$Detail = '') {
     $global:M365.State[$Service] = $State
     Send-M365Host ('svc|{0}|{1}|{2}' -f $Service, $State, ($Detail -replace '[\r\n|]+', ' '))
@@ -74,6 +113,8 @@ function Connect-M365 {
     <#
     .SYNOPSIS
         Verbindet die Sitzung mit einem oder mehreren M365-Diensten, angemeldet als Profil-Admin.
+        Standard: Die Anmeldung wird aus dem integrierten Browser übernommen (kein zweites MFA).
+        -Classic nutzt stattdessen die normale Anmeldung des jeweiligen Moduls.
     .EXAMPLE
         Connect-M365 Graph
         Connect-M365 Exchange, Teams
@@ -87,12 +128,15 @@ function Connect-M365 {
         [string[]]$Service = 'All',
         [string[]]$Scopes,
         [switch]$Force,
-        [switch]$Auto
+        [switch]$Auto,
+        [switch]$Classic,
+        [switch]$Quiet
     )
 
     if ($Service -contains 'All') { $Service = @($global:M365.State.Keys) }
     $upn = $global:M365.Upn
     $tenant = $global:M365.Tenant
+    $useToken = -not $Classic -and $global:M365.TokenMode -and $env:M365M_PIPE
 
     foreach ($svc in $Service) {
         if (-not $Auto) { $global:M365.Tried.Remove($svc) }
@@ -103,58 +147,32 @@ function Connect-M365 {
 
         $global:M365.Busy = $true
         Set-M365State $svc 'connecting'
-        if ($Auto) { Write-M365 "Befehl benötigt $svc → verbinde als $upn …" Cyan }
-        else { Write-M365 "Verbinde $svc als $upn …" Cyan }
+        if (-not $Quiet) {
+            if ($Auto) { Write-M365 "Befehl benötigt $svc → verbinde als $upn …" Cyan }
+            else { Write-M365 "Verbinde $svc als $upn …" Cyan }
+        }
 
         try {
             $detail = $upn
-            switch ($svc) {
-                'Graph' {
-                    $p = @{ NoWelcome = $true; ContextScope = 'Process'; ErrorAction = 'Stop' }
-                    $sc = if ($Scopes) { @($global:M365.GraphScopes) + $Scopes | Select-Object -Unique } else { $global:M365.GraphScopes }
-                    if ($sc) { $p.Scopes = $sc }
-                    if ($tenant) { $p.TenantId = $tenant }
-                    try { Connect-MgGraph @p }
-                    catch {
-                        if ($_.Exception.Message -notmatch 'WAM|broker|window handle') { throw }
-                        Write-M365 'Windows-Anmeldedialog (WAM) nicht verfügbar – nutze Browser-Anmeldung.' DarkYellow
-                        Set-MgGraphOption -DisableLoginByWAM $true
-                        Connect-MgGraph @p
-                    }
-                    $ctx = Get-MgContext
-                    if (-not $ctx) { throw 'Keine Graph-Verbindung.' }
-                    $detail = $ctx.Account
+            $global:M365.Expiry.Remove($svc)
+            $tokenOk = $false
+            if ($useToken) {
+                try {
+                    $expires = Connect-M365WithToken $svc $Scopes
+                    $global:M365.Expiry[$svc] = $expires
+                    $tokenOk = $true
+                    if ($svc -eq 'SharePoint') { $detail = "https://$($global:M365.SpTenant)-admin.sharepoint.com" }
                 }
-                'Exchange' {
-                    $p = @{ ShowBanner = $false; ErrorAction = 'Stop' }
-                    if ($upn) { $p.UserPrincipalName = $upn }
-                    try { Connect-ExchangeOnline @p }
-                    catch {
-                        if ($_.Exception.Message -notmatch 'WAM|broker|window handle' -or
-                            -not (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')) { throw }
-                        Write-M365 'Windows-Anmeldedialog (WAM) nicht verfügbar – nutze Browser-Anmeldung.' DarkYellow
-                        Connect-ExchangeOnline @p -DisableWAM
-                    }
-                }
-                'Purview' {
-                    $cmd = Get-Command Connect-IPPSSession
-                    $p = @{ ErrorAction = 'Stop' }
-                    if ($upn) { $p.UserPrincipalName = $upn }
-                    if ($cmd.Parameters.ContainsKey('ShowBanner')) { $p.ShowBanner = $false }
-                    Connect-IPPSSession @p
-                }
-                'Teams' {
-                    $p = @{ ErrorAction = 'Stop' }
-                    if ($upn) { $p.AccountId = $upn }
-                    $r = Connect-MicrosoftTeams @p
-                    if ($r.Account) { $detail = "$($r.Account)" }
-                }
-                'SharePoint' {
-                    $detail = Connect-M365SharePoint
+                catch {
+                    Write-M365 "Übernahme der Browser-Anmeldung nicht möglich: $($_.Exception.Message)" DarkYellow
+                    Write-M365 'Nutze stattdessen die normale Anmeldung des Moduls …' DarkGray
                 }
             }
+            if (-not $tokenOk) { $detail = Connect-M365Classic $svc $Scopes }
+
             Set-M365State $svc 'connected' $detail
-            Write-M365 "✓ $svc verbunden." Green
+            if ($Quiet) { Write-M365 "↻ $svc-Anmeldung erneuert." DarkGray }
+            else { Write-M365 "✓ $svc verbunden." Green }
         }
         catch {
             $msg = $_.Exception.Message
@@ -169,6 +187,94 @@ function Connect-M365 {
     }
 }
 
+# Verbindet per Token aus der Browser-Sitzung. Gibt den Ablaufzeitpunkt zurück.
+function Connect-M365WithToken([string]$Svc, [string[]]$Scopes) {
+    $tenant = $global:M365.Tenant
+    switch ($Svc) {
+        'Graph' {
+            $t = Get-M365Token Graph -ExtraScopes $Scopes
+            Connect-MgGraph -AccessToken (ConvertTo-SecureString $t.Token -AsPlainText -Force) -NoWelcome -ErrorAction Stop
+            return $t.ExpiresOn
+        }
+        'Exchange' {
+            $t = Get-M365Token Exchange
+            $p = @{ AccessToken = $t.Token; Organization = $tenant; ShowBanner = $false; ErrorAction = 'Stop' }
+            Connect-ExchangeOnline @p
+            return $t.ExpiresOn
+        }
+        'Purview' {
+            $cmd = Get-Command Connect-IPPSSession
+            if (-not $cmd.Parameters.ContainsKey('AccessToken')) { throw 'Diese Version von Connect-IPPSSession kann keine Tokens übernehmen.' }
+            $t = Get-M365Token Purview
+            $p = @{ AccessToken = $t.Token; Organization = $tenant; ErrorAction = 'Stop' }
+            if ($cmd.Parameters.ContainsKey('ShowBanner')) { $p.ShowBanner = $false }
+            Connect-IPPSSession @p
+            return $t.ExpiresOn
+        }
+        'Teams' {
+            $g = Get-M365Token TeamsGraph
+            $t = Get-M365Token Teams
+            Connect-MicrosoftTeams -AccessTokens @($g.Token, $t.Token) -ErrorAction Stop | Out-Null
+            return @($g.ExpiresOn, $t.ExpiresOn) | Sort-Object | Select-Object -First 1
+        }
+        'SharePoint' {
+            Initialize-M365SharePoint
+            $t = Get-M365Token SharePoint
+            Connect-PnPOnline -Url "https://$($global:M365.SpTenant)-admin.sharepoint.com" -AccessToken $t.Token -ErrorAction Stop
+            return $t.ExpiresOn
+        }
+    }
+}
+
+# Normale Anmeldung des jeweiligen Moduls (Fallback). Gibt das Detail für den Status zurück.
+function Connect-M365Classic([string]$Svc, [string[]]$Scopes) {
+    $upn = $global:M365.Upn
+    $tenant = $global:M365.Tenant
+    switch ($Svc) {
+        'Graph' {
+            $p = @{ NoWelcome = $true; ContextScope = 'Process'; ErrorAction = 'Stop' }
+            $sc = if ($Scopes) { @($global:M365.GraphScopes) + $Scopes | Select-Object -Unique } else { $global:M365.GraphScopes }
+            if ($sc) { $p.Scopes = $sc }
+            if ($tenant) { $p.TenantId = $tenant }
+            try { Connect-MgGraph @p }
+            catch {
+                if ($_.Exception.Message -notmatch 'WAM|broker|window handle') { throw }
+                Set-MgGraphOption -DisableLoginByWAM $true
+                Connect-MgGraph @p
+            }
+            $ctx = Get-MgContext
+            if (-not $ctx) { throw 'Keine Graph-Verbindung.' }
+            return $ctx.Account
+        }
+        'Exchange' {
+            $p = @{ ShowBanner = $false; ErrorAction = 'Stop' }
+            if ($upn) { $p.UserPrincipalName = $upn }
+            Connect-ExchangeOnline @p
+            return $upn
+        }
+        'Purview' {
+            $cmd = Get-Command Connect-IPPSSession
+            $p = @{ ErrorAction = 'Stop' }
+            if ($upn) { $p.UserPrincipalName = $upn }
+            if ($cmd.Parameters.ContainsKey('ShowBanner')) { $p.ShowBanner = $false }
+            Connect-IPPSSession @p
+            return $upn
+        }
+        'Teams' {
+            $p = @{ ErrorAction = 'Stop' }
+            if ($upn) { $p.AccountId = $upn }
+            $r = Connect-MicrosoftTeams @p
+            if ($r.Account) { return "$($r.Account)" }
+            return $upn
+        }
+        'SharePoint' {
+            Initialize-M365SharePoint
+            $url = "https://$($global:M365.SpTenant)-admin.sharepoint.com"
+            Connect-PnPOnline -Url $url -Interactive -ClientId $global:M365.PnPClientId -ErrorAction Stop
+            return $url
+        }
+    }
+}
 function Disconnect-M365 {
     [CmdletBinding()]
     param(
@@ -191,6 +297,7 @@ function Disconnect-M365 {
             }
             catch { }
             $global:M365.Tried.Remove($svc)
+            $global:M365.Expiry.Remove($svc)
             Set-M365State $svc 'disconnected'
             Write-M365 "$svc getrennt." DarkGray
         }
@@ -257,7 +364,8 @@ function Register-M365PnPApp {
     $id
 }
 
-function Connect-M365SharePoint {
+# Stellt sicher, dass SharePoint-Tenantname und PnP-App bekannt sind.
+function Initialize-M365SharePoint {
     $t = Get-M365SharePointTenant
     if (-not $t) { throw 'Kein SharePoint-Tenantname angegeben.' }
 
@@ -269,12 +377,7 @@ function Connect-M365SharePoint {
         }
         Register-M365PnPApp | Out-Null
     }
-
-    $url = "https://$t-admin.sharepoint.com"
-    Connect-PnPOnline -Url $url -Interactive -ClientId $global:M365.PnPClientId -ErrorAction Stop
-    $url
 }
-
 # ------------------------------------------------------------------ Status & Hilfe
 
 function Get-M365Status {
@@ -309,6 +412,7 @@ function Get-M365Help {
     Write-Host "  ${c}Befehle${r}"
     Write-Host "  Connect-M365 [Graph|Exchange|Purview|Teams|SharePoint|All]   manuell verbinden"
     Write-Host "  Connect-M365 Graph -Scopes Mail.Read                        zusätzliche Graph-Berechtigung"
+    Write-Host "  Connect-M365 Exchange -Classic                              normale Modul-Anmeldung statt Browser-Übernahme"
     Write-Host "  Disconnect-M365 [Dienst|All]                                trennen"
     Write-Host "  Get-M365Status                                               Verbindungsstatus"
     Write-Host "  Set-M365AutoConnect `$false                                  Auto-Verbinden aus"
@@ -334,15 +438,28 @@ function Resolve-M365Service([string]$Name, [switch]$NotFound) {
     $null
 }
 
+# Erneuert eine per Token übernommene Verbindung still, kurz bevor sie abläuft.
+function Update-M365Connection([string]$Name) {
+    $svc = Resolve-M365Service $Name
+    if (-not $svc) { $svc = Resolve-M365Service $Name -NotFound }
+    if (-not $svc -or $global:M365.State[$svc] -ne 'connected') { return $svc }
+    $exp = $global:M365.Expiry[$svc]
+    if ($exp -and $exp -lt [DateTimeOffset]::UtcNow.AddMinutes(5)) {
+        Connect-M365 -Service $svc -Force -Auto -Quiet
+    }
+    $svc
+}
+
 $ExecutionContext.InvokeCommand.PreCommandLookupAction = {
     param([string]$CommandName, [System.Management.Automation.CommandLookupEventArgs]$EventArgs)
     if ($global:M365.Busy -or -not $global:M365.AutoConnect) { return }
     if ($EventArgs.CommandOrigin -ne 'Runspace') { return }
+    if ($CommandName -notmatch '^\w+-\w+$') { return }
+    Update-M365Connection $CommandName | Out-Null
     $svc = Resolve-M365Service $CommandName
     if (-not $svc -or $global:M365.State[$svc] -eq 'connected' -or $global:M365.Tried[$svc]) { return }
     Connect-M365 -Service $svc -Auto
 }
-
 $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
     param([string]$CommandName, [System.Management.Automation.CommandLookupEventArgs]$EventArgs)
     if ($global:M365.Busy -or -not $global:M365.AutoConnect) { return }
@@ -408,7 +525,7 @@ Write-Host "  $($global:M365.ColorEsc)●`e[0m `e[1mM365 Manager`e[0m  `e[90m·`
 Write-Host "  `e[90mKonto `e[0m $($global:M365.Upn)"
 if ($global:M365.Tenant) { Write-Host "  `e[90mTenant`e[0m $($global:M365.Tenant)" }
 Write-Host ''
-Write-Host "  `e[90mDienste verbinden sich automatisch, sobald ein Befehl sie braucht (Get-MgUser, Get-Mailbox, Get-Team …).`e[0m"
+Write-Host "  `e[90mDienste verbinden sich automatisch mit der Browser-Anmeldung, sobald ein Befehl sie braucht (Get-MgUser, Get-Mailbox …).`e[0m"
 Write-Host "  `e[90mConnect-M365 · Disconnect-M365 · Get-M365Status · `e[0mGet-M365Help"
 
 $missing = @('Microsoft.Graph.Authentication', 'ExchangeOnlineManagement', 'MicrosoftTeams', 'PnP.PowerShell') |
