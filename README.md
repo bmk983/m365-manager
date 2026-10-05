@@ -2,9 +2,23 @@
 
 Ein Fenster pro Admin-Konto: **integrierter Edge-Browser** für alle Microsoft-365-Portale plus ein **echtes PowerShell-7-Terminal**, das sich automatisch mit Graph, Exchange, Purview, Teams und SharePoint verbindet. Du musst in Edge nicht mehr zwischen Konten wechseln.
 
+## Download & Installation
+
+**Schnellinstallation**: diesen Befehl in PowerShell ausführen. Er lädt das neueste Setup, prüft die Prüfsumme und installiert ohne Adminrechte:
+
+```powershell
+irm https://raw.githubusercontent.com/bmk983/m365-manager/main/install.ps1 | iex
+```
+
+**Oder manuell** unter [Releases](https://github.com/bmk983/m365-manager/releases):
+
+- **`M365Manager-Setup-x.y.z.exe`**: Installer. Er installiert nur für dich, ohne Adminrechte, nach `%LOCALAPPDATA%\Programs\M365 Manager`, legt einen Startmenü-Eintrag an, optional ein Desktop-Symbol, und bringt einen Deinstaller mit.
+- **`M365Manager-x.y.z-portable.exe`**: Einfach starten, ohne Installation, z. B. vom USB-Stick.
+
+Windows SmartScreen kann beim ersten Start warnen, weil die Datei noch nicht signiert ist („Weitere Informationen“ → „Trotzdem ausführen“).
 ## Start
 
-`dist\M365Manager.exe` starten. Es ist keine Installation und kein Adminrecht nötig.
+Es ist kein Adminrecht nötig.
 
 Beim ersten Start lädt die App einmalig:
 
