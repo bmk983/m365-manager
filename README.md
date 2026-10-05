@@ -57,7 +57,12 @@ Eigene Erweiterungen kommen in `M365Manager-Data\custom.ps1`. Die Datei wird bei
 
 ## Bauen
 
-Voraussetzung ist das .NET 8 SDK. `.\publish.ps1` erzeugt `dist\M365Manager.exe` (self-contained, eine Datei).
+Voraussetzung ist das .NET 8 SDK.
+
+- `.\publish.ps1` erzeugt `dist\M365Manager.exe` (self-contained, eine Datei).
+- `.\publish.ps1 -Version 1.2.0 -Setup` erzeugt zusätzlich den Installer. Inno Setup wird dafür automatisch als NuGet-Paket nach `tools\` geladen.
+
+**Neue Version veröffentlichen:** Einen Tag pushen, z. B. `git tag v1.2.0` und dann `git push origin v1.2.0`. GitHub Actions baut daraufhin App und Setup und legt beides als Release an. Alternativ geht das über *Actions → Release → Run workflow*.
 
 ## Technik
 

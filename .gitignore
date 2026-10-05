@@ -4,3 +4,4 @@ dist/
 M365Manager-Data/
 *.user
 .vs/
+tools/

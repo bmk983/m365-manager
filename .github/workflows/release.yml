@@ -1,0 +1,51 @@
+# Baut bei jedem Versions-Tag (z. B. v1.1.0) die App und das Setup und veröffentlicht beides als GitHub Release.
+# Alternativ manuell starten: Actions -> Release -> Run workflow.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (z. B. 1.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Version bestimmen
+        id: version
+        shell: pwsh
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $v = if ($env:EVENT -eq 'push') { $env:TAG.TrimStart('v') } else { $env:INPUT_VERSION.TrimStart('v') }
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Ungültige Version: $v (erwartet z. B. 1.2.3)" }
+          "value=$v" >> $env:GITHUB_OUTPUT
+
+      - name: App und Setup bauen
+        shell: pwsh
+        run: ./publish.ps1 -Version ${{ steps.version.outputs.value }} -Setup
+
+      - name: Release veröffentlichen
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.value }}
+          name: M365 Manager ${{ steps.version.outputs.value }}
+          generate_release_notes: true
+          files: |
+            dist/M365Manager-Setup-${{ steps.version.outputs.value }}.exe
+            dist/M365Manager-${{ steps.version.outputs.value }}-portable.exe
