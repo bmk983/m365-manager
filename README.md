@@ -4,16 +4,21 @@ Ein Fenster pro Admin-Konto: **integrierter Edge-Browser** für alle Microsoft-3
 
 ## Download & Installation
 
-**Schnellinstallation**: diesen Befehl in PowerShell ausführen. Er lädt das neueste Setup, prüft die Prüfsumme und installiert ohne Adminrechte:
+M365 Manager ist eine **einzelne portable EXE**, es gibt bewusst keinen Installer.
+
+**Per Befehl** in PowerShell: Er lädt die neueste Version, prüft die Prüfsumme, legt sie nach `%LOCALAPPDATA%\Programs\M365 Manager` und erstellt einen Startmenü-Eintrag. Es sind keine Adminrechte nötig. Derselbe Befehl aktualisiert auch.
 
 ```powershell
 irm https://raw.githubusercontent.com/bmk983/m365-manager/main/install.ps1 | iex
 ```
 
-**Oder manuell** unter [Releases](https://github.com/bmk983/m365-manager/releases):
+Entfernen:
 
-- **`M365Manager-Setup-x.y.z.exe`**: Installer. Er installiert nur für dich, ohne Adminrechte, nach `%LOCALAPPDATA%\Programs\M365 Manager`, legt einen Startmenü-Eintrag an, optional ein Desktop-Symbol, und bringt einen Deinstaller mit.
-- **`M365Manager-x.y.z-portable.exe`**: Einfach starten, ohne Installation, z. B. vom USB-Stick.
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/bmk983/m365-manager/main/install.ps1))) -Uninstall
+```
+
+**Oder manuell:** `M365Manager-x.y.z-portable.exe` unter [Releases](https://github.com/bmk983/m365-manager/releases) herunterladen und an einen beliebigen Ort legen, zum Beispiel einen USB-Stick.
 
 Windows SmartScreen kann beim ersten Start warnen, weil die Datei noch nicht signiert ist („Weitere Informationen“ → „Trotzdem ausführen“).
 ## Start
@@ -74,9 +79,9 @@ Eigene Erweiterungen kommen in `M365Manager-Data\custom.ps1`. Die Datei wird bei
 Voraussetzung ist das .NET 8 SDK.
 
 - `.\publish.ps1` erzeugt `dist\M365Manager.exe` (self-contained, eine Datei).
-- `.\publish.ps1 -Version 1.2.0 -Setup` erzeugt zusätzlich den Installer. Inno Setup wird dafür automatisch als NuGet-Paket nach `tools\` geladen.
+- `.\publish.ps1 -Version 1.2.0` erzeugt zusätzlich `dist\M365Manager-1.2.0-portable.exe` für ein Release.
 
-**Neue Version veröffentlichen:** Einen Tag pushen, z. B. `git tag v1.2.0` und dann `git push origin v1.2.0`. GitHub Actions baut daraufhin App und Setup und legt beides als Release an. Alternativ geht das über *Actions → Release → Run workflow*.
+**Neue Version veröffentlichen:** Einen Tag pushen, z. B. `git tag v1.2.0` und dann `git push origin v1.2.0`. GitHub Actions baut daraufhin die App und legt sie als Release an. Alternativ geht das über *Actions → Release → Run workflow*.
 
 ## Technik
 
