@@ -393,12 +393,26 @@ function Set-M365AutoConnect([bool]$Enabled = $true) {
 }
 
 function Install-M365Module {
-    <# .SYNOPSIS Lädt ein zusätzliches Modul portabel in den Datenordner. #>
+    <#
+    .SYNOPSIS
+        Lädt ein zusätzliches Modul portabel in den Datenordner.
+        Graph-Module werden automatisch in derselben Version wie die vorhandenen installiert.
+    .EXAMPLE
+        Install-M365Module Microsoft.Graph.Planner
+    #>
     param([Parameter(Mandatory)][string[]]$Name)
-    Save-PSResource -Name $Name -Path $env:M365M_MODULES -Repository PSGallery -TrustRepository
-    Write-M365 "✓ Installiert: $($Name -join ', ')" Green
+    foreach ($n in $Name) {
+        $p = @{ Name = $n; Path = $env:M365M_MODULES; Repository = 'PSGallery'; TrustRepository = $true }
+        if ($n -like 'Microsoft.Graph.*') {
+            $gv = Get-ChildItem (Join-Path $env:M365M_MODULES 'Microsoft.Graph.Authentication') -Directory -ErrorAction SilentlyContinue |
+                Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1 -ExpandProperty Name
+            if ($gv) { $p.Version = "[$gv]"; $p.SkipDependencyCheck = $true }
+        }
+        Save-PSResource @p
+        Write-M365 "✓ Installiert: $n$(if ($p.Version) { " $($p.Version)" })" Green
+    }
+    Write-M365 'Tipp: In einem neuen Terminal (+) ist das Modul sofort sauber verfügbar.' DarkGray
 }
-
 function Get-M365Help {
     $c = "`e[36m"; $r = "`e[0m"; $d = "`e[90m"
     Write-Host ''
