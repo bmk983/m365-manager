@@ -210,24 +210,89 @@ public static class SetupService
         }
 
         Emit("Entpacke PowerShell " + version + " …");
-        var staging = AppPaths.PwshDir + ".new";
-        if (Directory.Exists(staging)) Directory.Delete(staging, true);
+        CleanupStaleStaging();
+        // Eindeutiger Name: Reste eines abgebrochenen Versuchs (z. B. vom Virenscanner gesperrt) stören nicht.
+        var staging = AppPaths.PwshDir + ".new-" + Guid.NewGuid().ToString("N")[..8];
         ZipFile.ExtractToDirectory(tmpZip, staging);
-        File.Delete(tmpZip);
+        TryDelete(tmpZip);
 
         if (Directory.Exists(AppPaths.PwshDir))
         {
-            try { Directory.Delete(AppPaths.PwshDir, true); }
+            try { await RetryIoAsync(() => DeleteDirectory(AppPaths.PwshDir)); }
             catch (Exception ex)
             {
-                Directory.Delete(staging, true);
+                TryDeleteDirectory(staging);
                 throw new InvalidOperationException("Die alte PowerShell wird noch verwendet. Bitte alle Profilfenster schließen und erneut aktualisieren. (" + ex.Message + ")");
             }
         }
-        Directory.Move(staging, AppPaths.PwshDir);
+
+        // Virenscanner prüfen frisch entpackte Dateien und halten sie dabei kurz offen –
+        // das Umbenennen daher mehrfach versuchen und notfalls kopieren.
+        try
+        {
+            await RetryIoAsync(() => Directory.Move(staging, AppPaths.PwshDir));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Emit("   Umbenennen blockiert (vermutlich Virenscan) – kopiere stattdessen …");
+            await RetryIoAsync(() => CopyDirectory(staging, AppPaths.PwshDir));
+            TryDeleteDirectory(staging);
+        }
+
+        if (!File.Exists(PortablePwshPath))
+            throw new InvalidOperationException("pwsh.exe fehlt nach dem Entpacken. Möglicherweise hat der Virenscanner sie entfernt.");
         Emit("✓ PowerShell " + version + " bereit.");
     }
 
+    private static async Task RetryIoAsync(Action action, int attempts = 12)
+    {
+        for (var i = 1; ; i++)
+        {
+            try
+            {
+                action();
+                return;
+            }
+            catch (Exception ex) when (i < attempts && ex is IOException or UnauthorizedAccessException)
+            {
+                await Task.Delay(Math.Min(500 * i, 3000));
+            }
+        }
+    }
+
+    private static void CopyDirectory(string source, string target)
+    {
+        Directory.CreateDirectory(target);
+        foreach (var dir in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(Path.Combine(target, Path.GetRelativePath(source, dir)));
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+            File.Copy(file, Path.Combine(target, Path.GetRelativePath(source, file)), overwrite: true);
+    }
+
+    private static void DeleteDirectory(string dir)
+    {
+        if (!Directory.Exists(dir)) return;
+        foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+            File.SetAttributes(file, FileAttributes.Normal);
+        Directory.Delete(dir, true);
+    }
+
+    private static void TryDeleteDirectory(string dir)
+    {
+        try { DeleteDirectory(dir); } catch (Exception ex) { Log.Write("Aufräumen von " + dir + " nicht möglich: " + ex.Message); }
+    }
+
+    private static void TryDelete(string file)
+    {
+        try { File.Delete(file); } catch { }
+    }
+
+    /// <summary>Entfernt Reste früherer, abgebrochener Entpack-Versuche (soweit möglich).</summary>
+    private static void CleanupStaleStaging()
+    {
+        foreach (var dir in Directory.EnumerateDirectories(AppPaths.DataRoot, "pwsh.new*"))
+            TryDeleteDirectory(dir);
+    }
     private static string? FindHash(string text, string assetName)
     {
         foreach (var line in text.Split('\n'))
