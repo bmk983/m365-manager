@@ -14,6 +14,7 @@
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <Version>1.0.0</Version>
     <Product>M365 Manager</Product>
+    <Copyright>Copyright (c) 2026 bmk983 · MIT License</Copyright>
 
     <!-- Portabel: eine einzige EXE, keine .NET-Installation noetig -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

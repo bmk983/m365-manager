@@ -70,3 +70,7 @@ Voraussetzung ist das .NET 8 SDK.
 - WebView2 (Edge), ein Benutzerdatenordner pro Profil
 - Terminal: Windows-Pseudokonsole (ConPTY) + xterm.js
 - Rückkanal PowerShell → App über eine Named Pipe (nur für den aktuellen Benutzer)
+
+## Lizenz
+
+[MIT](LICENSE). Enthält [xterm.js](https://github.com/xtermjs/xterm.js) (MIT) und nutzt [WPF-UI](https://github.com/lepoco/wpfui) (MIT).
