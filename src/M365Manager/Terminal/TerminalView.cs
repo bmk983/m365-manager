@@ -323,12 +323,15 @@ public sealed class TerminalView : Grid, IDisposable
     }
 
     /// <summary>Tippt einen Befehl in die Sitzung und führt ihn aus.</summary>
-    public void SendCommand(string command)
+    public void SendCommand(string command, bool focus = true)
     {
         if (_pty is null) return;
         _pty.Write(command + "\r");
-        FocusTerminal();
+        if (focus) FocusTerminal();
     }
+
+    /// <summary>Strg+C an die Sitzung – bricht den laufenden Befehl ab.</summary>
+    public void SendInterrupt() => _pty?.Write("\x03");
 
     public void FocusTerminal()
     {

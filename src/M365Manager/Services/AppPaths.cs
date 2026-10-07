@@ -13,6 +13,11 @@ public static class AppPaths
     public static string AppDir => Path.Combine(DataRoot, "app");
     public static string TerminalAssetsDir => Path.Combine(AppDir, "terminal");
     public static string ScriptsDir => Path.Combine(AppDir, "ps");
+    public static string EditorAssetsDir => Path.Combine(AppDir, "editor");
+    /// <summary>Gemeinsamer Ordner für eigene Skripte aller Profile.</summary>
+    public static string UserScriptsDir => Path.Combine(DataRoot, "scripts");
+    /// <summary>Temporäre Dateien für F5/F8 aus dem Editor.</summary>
+    public static string RunDir => Path.Combine(UserScriptsDir, ".run");
     public static string UiWebViewDir => Path.Combine(AppDir, "webview");
     public static string PwshDir => Path.Combine(DataRoot, "pwsh");
     public static string ModulesDir => Path.Combine(DataRoot, "modules");

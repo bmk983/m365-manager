@@ -62,6 +62,17 @@ Die Chips über dem Terminal zeigen den Status (grau = getrennt, gelb = verbinde
 
 Eigene Erweiterungen kommen in `M365Manager-Data\custom.ps1`. Die Datei wird bei jedem Terminalstart geladen.
 
+## Skript-Editor
+
+In der Seitenleiste unter **Skript-Editor** öffnet sich ein Editor wie in VS Code bzw. der ISE (Monaco):
+
+- PowerShell-Farben wie in VS Code, mehrere Skripte als Tabs, Suchen/Ersetzen, Minimap, Code einklappen (`#region`)
+- **IntelliSense:** Cmdlets aller Module, Parameter, Parameterwerte, Variablen und Pfade, dieselben Vorschläge wie Tab im Terminal. **Tab** oder **Enter** übernimmt, **Strg+Leertaste** öffnet die Liste.
+- **F5** führt das Skript im aktiven Terminal aus, **F8** die Auswahl bzw. die aktuelle Zeile. Es läuft in der bereits verbundenen Sitzung (Graph, Exchange, …), Variablen bleiben danach verfügbar.
+- Eigene Skripte liegen standardmäßig in `M365Manager-Data\scripts`. **Strg+O / Strg+S** öffnet bzw. speichert. Offene Skripte, auch ungespeicherte, sind beim nächsten Start wieder da.
+
+Hinweis: Exchange- und Purview-Cmdlets (z. B. `Get-Mailbox`) erscheinen erst in den Vorschlägen, wenn sie im Terminal einmal verbunden wurden. Sie entstehen erst beim Verbinden.
+
 ## Tastenkürzel
 
 | Kürzel                   | Aktion                                     |
@@ -92,4 +103,4 @@ Voraussetzung ist das .NET 8 SDK.
 
 ## Lizenz
 
-[MIT](LICENSE). Enthält [xterm.js](https://github.com/xtermjs/xterm.js) (MIT) und nutzt [WPF-UI](https://github.com/lepoco/wpfui) (MIT).
+[MIT](LICENSE). Enthält [xterm.js](https://github.com/xtermjs/xterm.js) (MIT) und den [Monaco Editor](https://github.com/microsoft/monaco-editor) (MIT) und nutzt [WPF-UI](https://github.com/lepoco/wpfui) (MIT).

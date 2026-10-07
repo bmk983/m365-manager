@@ -59,6 +59,7 @@ public partial class App : Application
 
         try { AssetExtractor.ExtractAll(); }
         catch (Exception ex) { Log.Write("Assets: " + ex.Message); }
+        CleanupRunFiles();
 
         ApplySystemTheme();
 
@@ -67,6 +68,28 @@ public partial class App : Application
 
         // M365Manager.exe --profile "Contoso" öffnet das Profil direkt (z. B. für Desktop-Verknüpfungen).
         if (FindProfile(ProfileArgument(e.Args)) is { } profile) OpenProfile(profile);
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        CompletionService.Stop();
+        base.OnExit(e);
+    }
+
+    /// <summary>Temporäre Dateien von F5/F8 (älter als ein Tag) entfernen.</summary>
+    private static void CleanupRunFiles()
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(AppPaths.RunDir)) return;
+            foreach (var file in System.IO.Directory.EnumerateFiles(AppPaths.RunDir, "*.ps1"))
+                if (System.IO.File.GetLastWriteTime(file) < DateTime.Now.AddDays(-1))
+                    System.IO.File.Delete(file);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Aufräumen .run: " + ex.Message);
+        }
     }
 
     private static void ApplySystemTheme()

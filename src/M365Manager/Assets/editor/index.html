@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Skript-Editor</title>
+<link rel="stylesheet" href="vs/editor/editor.main.css">
+<link rel="stylesheet" href="editor.css">
+</head>
+<body>
+<div id="toolbar">
+  <div id="tabs" role="tablist"></div>
+  <div class="actions">
+    <button id="btnNew" title="Neues Skript (Strg+N)"><svg viewBox="0 0 16 16"><path d="M9.5 1.5H4A1.5 1.5 0 0 0 2.5 3v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V5.5z" fill="none" stroke="currentColor"/><path d="M9.5 1.5v4h4M8 7.5v5M5.5 10h5" fill="none" stroke="currentColor"/></svg></button>
+    <button id="btnOpen" title="Öffnen (Strg+O)"><svg viewBox="0 0 16 16"><path d="M1.5 12.5v-9a1 1 0 0 1 1-1h3.6l1.5 1.5h5.4a1 1 0 0 1 1 1v1.5M1.5 12.5l2-6h11l-2 6z" fill="none" stroke="currentColor" stroke-linejoin="round"/></svg></button>
+    <button id="btnSave" title="Speichern (Strg+S)"><svg viewBox="0 0 16 16"><path d="M2.5 2.5h9l2 2v9h-11z" fill="none" stroke="currentColor" stroke-linejoin="round"/><path d="M5 2.5v3.5h5V2.5M4.5 13.5v-4h7v4" fill="none" stroke="currentColor"/></svg></button>
+    <span class="sep"></span>
+    <button id="btnRun" class="primary" title="Skript ausführen (F5)"><svg viewBox="0 0 16 16"><path d="M4.5 2.8v10.4L13 8z" fill="currentColor"/></svg> Ausführen</button>
+    <button id="btnRunSel" title="Auswahl bzw. aktuelle Zeile ausführen (F8)"><svg viewBox="0 0 16 16"><path d="M3.5 3.5v9L10 8z" fill="none" stroke="currentColor" stroke-linejoin="round"/><path d="M12 3.5v9" stroke="currentColor"/></svg> Auswahl</button>
+    <button id="btnStop" title="Laufenden Befehl abbrechen (Strg+Pause)"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg></button>
+  </div>
+</div>
+<div id="editor"></div>
+<div id="status">
+  <span id="stFile">Unbenannt</span>
+  <span class="grow"></span>
+  <span id="stHint"></span>
+  <span id="stPos">Z 1, Sp 1</span>
+  <span>PowerShell</span>
+  <span>UTF-8</span>
+</div>
+<script src="vs/nls/lang/de.js"></script>
+<script src="vs/loader.js"></script>
+<script src="editor.js"></script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+:root {
+  --bg: #1c1c1f; --bar: #202024; --tab: transparent; --tab-active: #2b2b30; --tab-hover: #26262b;
+  --fg: #e4e4e7; --muted: #9a9aa3; --border: #2f2f35; --accent: #4f9cf0; --accent-fg: #0b1220; --dirty: #f5b041;
+}
+:root.light {
+  --bg: #fbfbfc; --bar: #f3f3f5; --tab-active: #ffffff; --tab-hover: #ebebee;
+  --fg: #1f1f23; --muted: #6b6b75; --border: #e1e1e6; --accent: #0f6cbd; --accent-fg: #ffffff; --dirty: #b7791f;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--fg);
+  font: 12.5px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+body { display: flex; flex-direction: column; }
+#toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 8px 0 8px; background: var(--bar); border-bottom: 1px solid var(--border); min-height: 40px; }
+#tabs { display: flex; gap: 2px; flex: 1; overflow-x: auto; scrollbar-width: none; align-self: flex-end; }
+#tabs::-webkit-scrollbar { display: none; }
+.tab { display: flex; align-items: center; gap: 6px; padding: 7px 8px 8px 12px; border-radius: 6px 6px 0 0; cursor: pointer; white-space: nowrap;
+  color: var(--muted); background: var(--tab); max-width: 220px; user-select: none; }
+.tab:hover { background: var(--tab-hover); color: var(--fg); }
+.tab.active { background: var(--tab-active); color: var(--fg); box-shadow: inset 0 2px 0 var(--accent); }
+.tab .name { overflow: hidden; text-overflow: ellipsis; }
+.tab .close { width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; font-size: 13px; opacity: .6; }
+.tab .close:hover { background: rgba(128,128,128,.25); opacity: 1; }
+.tab .close::before { content: "✕"; font-size: 11px; }
+.tab.dirty .close::before { content: "●"; color: var(--dirty); font-size: 10px; }
+.tab.dirty .close:hover::before { content: "✕"; color: inherit; font-size: 11px; }
+.actions { display: flex; align-items: center; gap: 4px; padding-bottom: 6px; }
+.actions .sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+button { font: inherit; color: var(--fg); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 4px 9px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px; height: 28px; }
+button:hover { background: var(--tab-hover); border-color: var(--border); }
+button.primary { background: var(--accent); color: var(--accent-fg); }
+button.primary:hover { filter: brightness(1.08); }
+button svg { width: 15px; height: 15px; flex: none; }
+#btnStop { color: #e85a64; }
+#editor { flex: 1; min-height: 0; }
+#status { display: flex; gap: 14px; padding: 3px 12px; font-size: 11.5px; color: var(--muted); background: var(--bar); border-top: 1px solid var(--border); }
+#status .grow { flex: 1; }
+#stHint { color: var(--accent); }

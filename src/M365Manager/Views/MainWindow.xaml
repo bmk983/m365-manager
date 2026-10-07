@@ -141,6 +141,13 @@
                 <!-- Unten -->
                 <StackPanel DockPanel.Dock="Bottom">
                     <Separator Margin="4,6,4,6" />
+                    <Button x:Name="EditorNavButton" Style="{StaticResource NavButton}" Click="OpenEditor_Click"
+                            ToolTip="Skripte schreiben und im Terminal ausführen (F5 / F8)">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="DocumentEdit20" FontSize="18" />
+                            <TextBlock Text="Skript-Editor" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                     <Button Style="{StaticResource NavButton}" Click="ToggleTerminal_Click" ToolTip="Terminal ein-/ausblenden (Strg+Ö)">
                         <StackPanel Orientation="Horizontal">
                             <ui:SymbolIcon Symbol="WindowConsole20" FontSize="18" />
@@ -184,6 +191,17 @@
                             <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
                                           PreviewMouseWheel="TabScroller_PreviewMouseWheel">
                                 <StackPanel Orientation="Horizontal">
+                                    <Border x:Name="EditorTab" Margin="0,0,4,0" Padding="10,0,12,0" Height="32" CornerRadius="6" Cursor="Hand"
+                                            Background="Transparent" Visibility="Collapsed" MouseLeftButtonDown="EditorTab_MouseDown"
+                                            ToolTip="Skript-Editor">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:SymbolIcon Symbol="DocumentEdit20" FontSize="15" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                            <TextBlock Text="Skripte" FontSize="12.5" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Rectangle x:Name="EditorTabSeparator" Width="1" Height="18" Margin="2,0,6,0" VerticalAlignment="Center"
+                                               Fill="{DynamicResource DividerStrokeColorDefaultBrush}" Visibility="Collapsed" />
                                     <ItemsControl x:Name="BrowserTabs" ItemTemplate="{StaticResource BrowserTabTemplate}">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
@@ -194,7 +212,7 @@
                         </DockPanel>
 
                         <!-- Navigationsleiste -->
-                        <Grid Grid.Row="1" Margin="8,6,8,6">
+                        <Grid x:Name="NavBar" Grid.Row="1" Margin="8,6,8,6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
@@ -222,6 +240,7 @@
                         <ProgressBar x:Name="LoadingBar" Grid.Row="2" Height="2" IsIndeterminate="True" Visibility="Hidden" Margin="8,0" />
 
                         <Grid x:Name="BrowserHost" Grid.Row="3" Margin="1,2,1,1" />
+                        <Grid x:Name="EditorHost" Grid.Row="1" Grid.RowSpan="3" Margin="1,2,1,1" Visibility="Collapsed" />
 
                         <StackPanel x:Name="BrowserEmpty" Grid.Row="3" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed">
                             <ui:SymbolIcon Symbol="Globe24" FontSize="44" HorizontalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />

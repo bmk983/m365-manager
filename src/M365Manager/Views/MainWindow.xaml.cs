@@ -42,6 +42,8 @@ public partial class MainWindow : FluentWindow
     private bool _closed;
     private readonly TokenBroker _tokens;
     private string _profileIdentity = "";
+    private EditorView? _editor;
+    private bool _editorActive;
 
     public string ProfileId => _profile.Id;
 
@@ -79,8 +81,8 @@ public partial class MainWindow : FluentWindow
 
     private void ApplyProfile()
     {
-        Title = _profile.Name + " · M365 Manager";
-        AppTitleBar.Title = Title;
+        Title = (_editorActive ? "Skripte · " : "") + _profile.Name + " · M365 Manager";
+        AppTitleBar.Title = _profile.Name + " · M365 Manager";
         AvatarEllipse.Fill = _profile.ColorBrush;
         AvatarText.Text = _profile.Initials;
         ProfileNameText.Text = _profile.Name;
@@ -228,7 +230,8 @@ public partial class MainWindow : FluentWindow
     private void UpdatePortalHighlight()
     {
         foreach (var (key, button) in _portalButtons)
-            button.Tag = _activeTab?.PortalKey == key ? "active" : null;
+            button.Tag = !_editorActive && _activeTab?.PortalKey == key ? "active" : null;
+        EditorNavButton.Tag = _editorActive ? "active" : null;
     }
 
     // ================================================================== Browser-Tabs
@@ -391,6 +394,7 @@ public partial class MainWindow : FluentWindow
 
     private void SelectTab(BrowserTab tab)
     {
+        SetEditorActive(false);
         foreach (var t in _tabs)
         {
             t.IsSelected = t == tab;
@@ -413,7 +417,12 @@ public partial class MainWindow : FluentWindow
         if (_activeTab == tab)
         {
             _activeTab = null;
-            if (_tabs.Count > 0) SelectTab(_tabs[Math.Min(index, _tabs.Count - 1)]);
+            if (_tabs.Count > 0)
+            {
+                var next = _tabs[Math.Min(index, _tabs.Count - 1)];
+                if (_editorActive) _activeTab = next;   // im Editor bleiben
+                else SelectTab(next);
+            }
         }
         UpdateNavState();
         UpdatePortalHighlight();
@@ -421,7 +430,7 @@ public partial class MainWindow : FluentWindow
     }
 
     private void UpdateEmptyState() =>
-        BrowserEmpty.Visibility = _tabs.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        BrowserEmpty.Visibility = _tabs.Count == 0 && !_editorActive ? Visibility.Visible : Visibility.Collapsed;
 
     private void UpdateNavState()
     {
@@ -431,7 +440,7 @@ public partial class MainWindow : FluentWindow
         ReloadButton.IsEnabled = core is not null;
 
         var loading = _activeTab?.IsLoading == true;
-        LoadingBar.Visibility = loading ? Visibility.Visible : Visibility.Hidden;
+        LoadingBar.Visibility = loading && !_editorActive ? Visibility.Visible : Visibility.Hidden;
         ReloadIcon.Symbol = loading ? SymbolRegular.Dismiss20 : SymbolRegular.ArrowClockwise20;
 
         if (!UrlBox.IsKeyboardFocusWithin)
@@ -515,6 +524,96 @@ public partial class MainWindow : FluentWindow
         if (!text.Contains(' ') && text.Contains('.'))
             return "https://" + text;
         return "https://www.bing.com/search?q=" + Uri.EscapeDataString(text);
+    }
+
+    // ================================================================== Skript-Editor
+
+    private void OpenEditor_Click(object sender, RoutedEventArgs e) => ShowEditor();
+
+    private void EditorTab_MouseDown(object sender, MouseButtonEventArgs e) => ShowEditor();
+
+    private void ShowEditor()
+    {
+        if (_editor is null)
+        {
+            _editor = new EditorView(_profile.Id, App.IsDark)
+            {
+                RunRequested = RunFromEditor,
+                StopRequested = () => _activeTerminal?.View.SendInterrupt(),
+            };
+            EditorHost.Children.Add(_editor);
+            EditorTab.Visibility = Visibility.Visible;
+            EditorTabSeparator.Visibility = Visibility.Visible;
+        }
+        SetEditorActive(true);
+        _editor.FocusEditor();
+    }
+
+    private void SetEditorActive(bool active)
+    {
+        _editorActive = active && _editor is not null;
+        EditorHost.Visibility = _editorActive ? Visibility.Visible : Visibility.Collapsed;
+        NavBar.Visibility = _editorActive ? Visibility.Collapsed : Visibility.Visible;
+        if (_editorActive) LoadingBar.Visibility = Visibility.Hidden;
+        foreach (var t in _tabs)
+        {
+            if (_editorActive) t.IsSelected = false;
+            t.View.Visibility = !_editorActive && t == _activeTab ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (!_editorActive && _activeTab is not null) _activeTab.IsSelected = true;
+        EditorTab.SetResourceReference(Border.BackgroundProperty, _editorActive ? "ControlFillColorDefaultBrush" : "SubtleFillColorTransparentBrush");
+        Title = (_editorActive ? "Skripte · " : "") + _profile.Name + " · M365 Manager";
+        UpdatePortalHighlight();
+        UpdateEmptyState();
+    }
+
+    /// <summary>F5/F8 aus dem Editor: Code im aktiven Terminal ausführen (dot-sourced, wie in der ISE).</summary>
+    private void RunFromEditor(string mode, string code, string? path, string name)
+    {
+        var terminal = _activeTerminal?.View;
+        if (terminal is null || !terminal.IsRunning)
+        {
+            _editor?.ShowHint("Kein laufendes Terminal – bitte warten, bis PowerShell bereit ist.");
+            return;
+        }
+        if (!_terminalVisible) SetTerminalVisible(true);
+
+        try
+        {
+            // Gespeicherte, unveränderte Datei direkt ausführen ($PSScriptRoot stimmt) – außer sie ist als
+            // "aus dem Internet" markiert; dann eine lokale Kopie, damit RemoteSigned nicht blockiert.
+            var file = path is not null && File.Exists(path) && !HasInternetMark(path) ? path : WriteRunFile(mode, code, name);
+            terminal.SendCommand(". '" + file.Replace("'", "''") + "'", focus: false);
+            _editor?.ShowHint("Läuft in " + terminal.Title);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Ausführen aus Editor: " + ex);
+            _editor?.ShowHint("Ausführen fehlgeschlagen: " + ex.Message);
+        }
+    }
+
+    private static string WriteRunFile(string mode, string code, string name)
+    {
+        Directory.CreateDirectory(AppPaths.RunDir);
+        var baseName = Path.GetFileNameWithoutExtension(name);
+        var safe = string.Concat(baseName.Split(Path.GetInvalidFileNameChars()));
+        var file = Path.Combine(AppPaths.RunDir, (mode == "selection" ? "Auswahl-" : "") + safe + "-" + DateTime.Now.ToString("HHmmss") + ".ps1");
+        File.WriteAllText(file, code, new System.Text.UTF8Encoding(true));
+        return file;
+    }
+
+    private static bool HasInternetMark(string path)
+    {
+        try
+        {
+            using var _ = File.OpenRead(path + ":Zone.Identifier");
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     // ================================================================== Terminal
@@ -610,6 +709,7 @@ public partial class MainWindow : FluentWindow
     private void OnThemeChanged(ApplicationTheme theme, Color accent)
     {
         foreach (var t in _terminalTabs) t.View.SetTheme(theme == ApplicationTheme.Dark);
+        _editor?.SetTheme(theme == ApplicationTheme.Dark);
     }
 
     // ================================================================== Layout
@@ -692,8 +792,8 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
-        // Im Terminal gehören alle anderen Tasten der Shell (Strg+W, Strg+L …).
-        if (TerminalPane.IsKeyboardFocusWithin) return;
+        // Im Terminal gehören alle anderen Tasten der Shell (Strg+W, Strg+L …), im Editor dem Editor (F5, Strg+W …).
+        if (TerminalPane.IsKeyboardFocusWithin || EditorHost.IsKeyboardFocusWithin) return;
 
         if (mods == ModifierKeys.Control && key == Key.T)
         {
@@ -735,6 +835,7 @@ public partial class MainWindow : FluentWindow
 
         foreach (var t in _terminalTabs) t.View.Dispose();
         foreach (var t in _tabs) t.View.Dispose();
+        _editor?.Dispose();
 
         base.OnClosed(e);
         App.OnProfileWindowClosed(this);
