@@ -54,7 +54,7 @@ public static class CompletionService
 
             // Erste Anfragen laden ggf. ein Modul (Graph: einige Sekunden). Antwortet der Helfer nicht rechtzeitig,
             // läuft er trotzdem weiter – die nächste Anfrage profitiert dann vom geladenen Modul.
-            var done = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(12)));
+            var done = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(20)));
             return done == tcs.Task ? (await tcs.Task, Status.Ok) : (null, Status.Loading);
         }
         catch (Exception ex)
@@ -99,6 +99,7 @@ public static class CompletionService
             foreach (var a in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script })
                 psi.ArgumentList.Add(a);
             psi.Environment["M365M_MODULES"] = AppPaths.ModulesDir;
+            psi.Environment["M365M_DATA"] = AppPaths.DataRoot;
             psi.Environment["POWERSHELL_TELEMETRY_OPTOUT"] = "1";
             psi.Environment["POWERSHELL_UPDATECHECK"] = "Off";
             psi.Environment.Remove("NO_COLOR");

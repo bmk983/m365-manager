@@ -180,7 +180,12 @@ function Connect-M365 {
 
             Set-M365State $svc 'connected' $detail
             if ($Quiet) { Write-M365 "↻ $svc-Anmeldung erneuert." DarkGray }
-            else { Write-M365 "✓ $svc verbunden." Green }
+            else {
+                Write-M365 "✓ $svc verbunden." Green
+                # IntelliSense im Editor über die Befehle dieser Verbindung informieren
+                if ($svc -eq 'Exchange') { Export-M365CompletionStub Exchange Get-Recipient }
+                elseif ($svc -eq 'Purview') { Export-M365CompletionStub Purview Get-DlpCompliancePolicy }
+            }
         }
         catch {
             $msg = $_.Exception.Message
@@ -201,6 +206,38 @@ $global:M365ModuleFor = @{
     Purview    = 'ExchangeOnlineManagement'
     Teams      = 'MicrosoftTeams'
     SharePoint = 'PnP.PowerShell'
+}
+
+# Schreibt nach dem Verbinden eine "Bauplan-Datei" mit allen Befehlen + Parametern des Dienstes,
+# damit IntelliSense im Skript-Editor auch Get-Recipient & Co. kennt. Enthält keine Funktion und keine Zugangsdaten.
+# Läuft in einem eigenen Thread, das Terminal wird nicht ausgebremst.
+function Export-M365CompletionStub([string]$Service, [string]$ProbeCommand) {
+    if (-not $env:M365M_DATA) { return }
+    try {
+        $module = (Get-Command $ProbeCommand -ErrorAction Stop).Module
+        if (-not $module) { return }
+        $commands = @(Get-Command -Module $module.Name -CommandType Function, Cmdlet -ErrorAction Stop)
+        $target = Join-Path $env:M365M_DATA ("completion\" + $Service.ToLowerInvariant() + ".psm1")
+        $null = Start-ThreadJob -ArgumentList $commands, $target -ScriptBlock {
+            param($commands, $target)
+            $sb = [System.Text.StringBuilder]::new()
+            $null = $sb.AppendLine('# Automatisch erzeugt von M365 Manager – nur für IntelliSense im Skript-Editor, ohne Funktion.')
+            foreach ($c in $commands) {
+                try {
+                    $meta = [System.Management.Automation.CommandMetadata]::new($c)
+                    $binding = [System.Management.Automation.ProxyCommand]::GetCmdletBindingAttribute($meta)
+                    $params = [System.Management.Automation.ProxyCommand]::GetParamBlock($meta)
+                    $null = $sb.AppendLine("function $($c.Name) {").AppendLine($binding).AppendLine("param($params)").AppendLine('}')
+                }
+                catch { }
+            }
+            New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+            $tmp = "$target.tmp"
+            [IO.File]::WriteAllText($tmp, $sb.ToString(), [System.Text.UTF8Encoding]::new($true))
+            Move-Item $tmp $target -Force
+        }
+    }
+    catch { }
 }
 
 # Trennt nur die Exchange- bzw. Purview-Verbindung(en), die jeweils andere bleibt bestehen.
