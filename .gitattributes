@@ -1,0 +1,5 @@
+# Fremdbibliotheken (Monaco, xterm.js) byte-genau lassen – keine Zeilenenden-Umwandlung
+src/M365Manager/Assets/editor/vs/** -text
+src/M365Manager/Assets/terminal/xterm.js -text
+src/M365Manager/Assets/terminal/addon-fit.js -text
+src/M365Manager/Assets/terminal/xterm.css -text
