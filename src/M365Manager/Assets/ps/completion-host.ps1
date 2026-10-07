@@ -22,6 +22,12 @@ $null = TabExpansion2 -inputScript 'Get-Mg' -cursorColumn 6
 $out.WriteLine('{"ready":true}')
 $out.Flush()
 
+# Häufig genutzte Module vorladen, damit Parameter-Vorschläge (z. B. Get-MgUser -) sofort kommen.
+# Läuft, bevor die erste Anfrage gelesen wird – Anfragen warten so lange in der Eingabe.
+foreach ($warm in 'Get-MgUser -', 'Get-MgGroup -') {
+    try { $null = TabExpansion2 -inputScript $warm -cursorColumn $warm.Length } catch { }
+}
+
 while ($null -ne ($line = [Console]::In.ReadLine())) {
     $id = 0
     try {

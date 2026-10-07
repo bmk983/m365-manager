@@ -97,6 +97,7 @@ public sealed class EditorView : Grid, IDisposable
         {
             case "ready":
                 Post(new { t = "init", profileId = _profileId, theme = _dark ? "dark" : "light" });
+                CompletionService.WarmUp();
                 break;
 
             case "dirty":
@@ -132,8 +133,9 @@ public sealed class EditorView : Grid, IDisposable
 
             case "complete":
             {
-                var raw = await CompletionService.CompleteAsync(Str("code") ?? "", m.GetProperty("offset").GetInt32());
+                var (raw, status) = await CompletionService.CompleteAsync(Str("code") ?? "", m.GetProperty("offset").GetInt32());
                 var node = raw is null ? new JsonObject { ["items"] = new JsonArray() } : JsonNode.Parse(raw)!.AsObject();
+                if (status != CompletionService.Status.Ok) node["status"] = status == CompletionService.Status.Loading ? "loading" : "unavailable";
                 node["t"] = "res";
                 node["id"] = id;
                 PostRaw(node.ToJsonString());

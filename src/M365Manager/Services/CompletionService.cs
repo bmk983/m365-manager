@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -8,116 +9,159 @@ namespace M365Manager.Services;
 /// <summary>
 /// IntelliSense für den Skript-Editor: eine unsichtbare PowerShell im Hintergrund beantwortet
 /// Vorschlagsanfragen über TabExpansion2 (dieselben Vorschläge wie Tab im Terminal).
-/// Wird beim ersten Bedarf gestartet und von allen Fenstern gemeinsam genutzt.
+/// Antworten werden von einem eigenen Lese-Thread zugeordnet – eine langsame Anfrage (Modul wird geladen)
+/// blockiert oder beendet den Helfer daher nicht.
 /// </summary>
 public static class CompletionService
 {
-    private static readonly SemaphoreSlim Gate = new(1, 1);
+    public enum Status { Ok, Loading, Unavailable }
+
+    private static readonly SemaphoreSlim StartGate = new(1, 1);
+    private static readonly SemaphoreSlim WriteGate = new(1, 1);
+    private static readonly ConcurrentDictionary<int, TaskCompletionSource<string>> Pending = new();
     private static Process? _process;
     private static int _counter;
     private static int _latestTicket;
 
-    /// <summary>Gibt die rohe JSON-Antwort des Helfers zurück (id, i, n, more, items) oder null.</summary>
-    public static async Task<string?> CompleteAsync(string code, int offset)
+    /// <summary>Startet den Helfer vorab (z. B. beim Öffnen des Editors), damit die ersten Vorschläge schnell kommen.</summary>
+    public static void WarmUp() => _ = Task.Run(EnsureStartedAsync);
+
+    /// <summary>Liefert die rohe JSON-Antwort (id, i, n, more, items) oder null samt Status.</summary>
+    public static async Task<(string? Json, Status Status)> CompleteAsync(string code, int offset)
     {
-        // Bei schnellem Tippen nur die neueste Anfrage beantworten – ältere sind bereits überholt.
+        // Bei schnellem Tippen nur die neueste Anfrage bearbeiten – ältere sind überholt.
         var ticket = Interlocked.Increment(ref _latestTicket);
-        if (!await Gate.WaitAsync(TimeSpan.FromSeconds(30))) return null;
+        var process = await EnsureStartedAsync();
+        if (process is null) return (null, Status.Unavailable);
+        if (ticket != Volatile.Read(ref _latestTicket)) return (null, Status.Ok);
+
+        var id = Interlocked.Increment(ref _counter);
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Pending[id] = tcs;
         try
         {
-            if (ticket != Volatile.Read(ref _latestTicket)) return null;
-            var process = await EnsureStartedAsync();
-            if (process is null) return null;
-
-            var id = ++_counter;
             var request = JsonSerializer.Serialize(new { id, s = Convert.ToBase64String(Encoding.UTF8.GetBytes(code)), c = offset });
-            await process.StandardInput.WriteLineAsync(request);
-            await process.StandardInput.FlushAsync();
-
-            // Erste Anfragen können Module laden (Graph: einige Sekunden) – großzügiges Zeitlimit.
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
-            while (true)
+            await WriteGate.WaitAsync();
+            try
             {
-                var line = await process.StandardOutput.ReadLineAsync(cts.Token);
-                if (line is null) { Stop(); return null; }
-                if (!line.StartsWith('{')) continue;   // Ausgaben, die keine Antwort sind, ignorieren
-                try
-                {
-                    using var doc = JsonDocument.Parse(line);
-                    if (doc.RootElement.TryGetProperty("id", out var rid) && rid.ValueKind == JsonValueKind.Number && rid.GetInt32() == id)
-                        return line;
-                }
-                catch (JsonException) { }
+                await process.StandardInput.WriteLineAsync(request);
+                await process.StandardInput.FlushAsync();
             }
-        }
-        catch (OperationCanceledException)
-        {
-            Log.Write("IntelliSense: Zeitüberschreitung – Helfer wird neu gestartet.");
-            Stop();
-            return null;
+            finally
+            {
+                WriteGate.Release();
+            }
+
+            // Erste Anfragen laden ggf. ein Modul (Graph: einige Sekunden). Antwortet der Helfer nicht rechtzeitig,
+            // läuft er trotzdem weiter – die nächste Anfrage profitiert dann vom geladenen Modul.
+            var done = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(12)));
+            return done == tcs.Task ? (await tcs.Task, Status.Ok) : (null, Status.Loading);
         }
         catch (Exception ex)
         {
             Log.Write("IntelliSense: " + ex.Message);
             Stop();
-            return null;
+            return (null, Status.Unavailable);
         }
         finally
         {
-            Gate.Release();
+            Pending.TryRemove(id, out _);
         }
     }
 
     private static async Task<Process?> EnsureStartedAsync()
     {
         if (_process is { HasExited: false }) return _process;
-        Stop();
 
-        var pwsh = SetupService.PwshPath;
-        var script = Path.Combine(AppPaths.ScriptsDir, "completion-host.ps1");
-        if (pwsh is null || !File.Exists(script)) return null;
-
-        var utf8 = new UTF8Encoding(false);
-        var psi = new ProcessStartInfo(pwsh)
+        await StartGate.WaitAsync();
+        try
         {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = utf8,
-            StandardOutputEncoding = utf8,
-            StandardErrorEncoding = utf8,
-            WorkingDirectory = AppPaths.DataRoot,
-        };
-        foreach (var a in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script })
-            psi.ArgumentList.Add(a);
-        psi.Environment["M365M_MODULES"] = AppPaths.ModulesDir;
-        psi.Environment["POWERSHELL_TELEMETRY_OPTOUT"] = "1";
-        psi.Environment["POWERSHELL_UPDATECHECK"] = "Off";
-        psi.Environment.Remove("NO_COLOR");
+            if (_process is { HasExited: false }) return _process;
+            Stop();
 
-        var process = Process.Start(psi);
-        if (process is null) return null;
-        process.ErrorDataReceived += (_, _) => { };   // stderr leeren, damit nichts blockiert
-        process.BeginErrorReadLine();
-        try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+            var pwsh = SetupService.PwshPath;
+            var script = Path.Combine(AppPaths.ScriptsDir, "completion-host.ps1");
+            if (pwsh is null || !File.Exists(script)) return null;
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var utf8 = new UTF8Encoding(false);
+            var psi = new ProcessStartInfo(pwsh)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardInputEncoding = utf8,
+                StandardOutputEncoding = utf8,
+                StandardErrorEncoding = utf8,
+                WorkingDirectory = AppPaths.DataRoot,
+            };
+            foreach (var a in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script })
+                psi.ArgumentList.Add(a);
+            psi.Environment["M365M_MODULES"] = AppPaths.ModulesDir;
+            psi.Environment["POWERSHELL_TELEMETRY_OPTOUT"] = "1";
+            psi.Environment["POWERSHELL_UPDATECHECK"] = "Off";
+            psi.Environment.Remove("NO_COLOR");
+
+            var process = Process.Start(psi);
+            if (process is null) return null;
+            process.ErrorDataReceived += (_, _) => { };   // stderr leeren, damit nichts blockiert
+            process.BeginErrorReadLine();
+            try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+
+            // Auf "ready" warten
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var ready = false;
+            try
+            {
+                string? line;
+                while ((line = await process.StandardOutput.ReadLineAsync(cts.Token)) is not null)
+                    if (line.Contains("\"ready\"")) { ready = true; break; }
+            }
+            catch (OperationCanceledException) { }
+
+            if (!ready)
+            {
+                Log.Write("IntelliSense-Helfer ist nicht gestartet.");
+                try { process.Kill(); } catch { }
+                process.Dispose();
+                return null;
+            }
+
+            _process = process;
+            _ = Task.Run(() => ReadLoopAsync(process));
+            Log.Write("IntelliSense-Helfer gestartet.");
+            return process;
+        }
+        finally
+        {
+            StartGate.Release();
+        }
+    }
+
+    private static async Task ReadLoopAsync(Process process)
+    {
         try
         {
             string? line;
-            while ((line = await process.StandardOutput.ReadLineAsync(cts.Token)) is not null)
+            while ((line = await process.StandardOutput.ReadLineAsync()) is not null)
             {
-                if (line.Contains("\"ready\"")) { _process = process; return process; }
+                if (!line.StartsWith('{')) continue;   // sonstige Ausgaben ignorieren
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    if (doc.RootElement.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.Number
+                        && Pending.TryGetValue(idEl.GetInt32(), out var tcs))
+                        tcs.TrySetResult(line);
+                }
+                catch (JsonException) { }
             }
         }
-        catch (OperationCanceledException) { }
-
-        Log.Write("IntelliSense-Helfer ist nicht gestartet.");
-        try { process.Kill(); } catch { }
-        process.Dispose();
-        return null;
+        catch (Exception ex)
+        {
+            Log.Write("IntelliSense-Lesen: " + ex.Message);
+        }
+        if (ReferenceEquals(_process, process)) Log.Write("IntelliSense-Helfer beendet – wird bei Bedarf neu gestartet.");
     }
 
     public static void Stop()

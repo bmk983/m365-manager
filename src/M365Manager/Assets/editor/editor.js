@@ -164,6 +164,17 @@
       triggerCharacters: ['-', '$', '.', ':', '\\', '[', '/'],
       async provideCompletionItems(model, position, context, token) {
         const res = await request({ t: 'complete', code: model.getValue(), offset: model.getOffsetAt(position) }, 30000);
+        if (res && res.status === 'loading') {
+          // Modul wird gerade geladen – Hinweis zeigen und gleich noch einmal nachfragen
+          hint('IntelliSense lädt Module …');
+          const at = model.getOffsetAt(position);
+          setTimeout(() => {
+            if (editor.getModel() === model && model.getOffsetAt(editor.getPosition()) === at)
+              editor.trigger('intellisense', 'editor.action.triggerSuggest', {});
+          }, 1500);
+        } else if (res && res.status === 'unavailable') {
+          hint('IntelliSense nicht verfügbar – PowerShell ist noch nicht eingerichtet (siehe Startfenster).');
+        }
         if (!res || !Array.isArray(res.items) || token.isCancellationRequested) return { suggestions: [] };
         const start = model.getPositionAt(res.i);
         const end = model.getPositionAt(res.i + res.n);
@@ -373,6 +384,18 @@
       suggest: { showWords: false, preview: true, showStatusBar: true }
     });
     editor.onDidChangeCursorPosition(updateStatus);
+
+    // Tab wie in der PowerShell-Konsole: direkt hinter einem Wort, "-" oder "$" öffnet Tab die Vorschläge,
+    // sonst rückt Tab wie gewohnt ein. (Ist die Liste offen, übernimmt Tab den Vorschlag.)
+    editor.addCommand(monaco.KeyCode.Tab, () => {
+      const model = editor.getModel();
+      const pos = editor.getPosition();
+      const before = model.getLineContent(pos.lineNumber).substring(0, pos.column - 1);
+      if (before.trim() && /[\w\-$:\\.\]]$/.test(before))
+        editor.trigger('keyboard', 'editor.action.triggerSuggest', {});
+      else
+        editor.trigger('keyboard', 'tab', null);
+    }, '!suggestWidgetVisible && !inSnippetMode && !editorHasSelection && !editorHasMultipleSelections && editorTextFocus');
 
     // Tastenkürzel – global abfangen, egal wo der Fokus gerade ist
     window.addEventListener('keydown', e => {
