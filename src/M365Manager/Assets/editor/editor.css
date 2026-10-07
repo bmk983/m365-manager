@@ -35,4 +35,12 @@ button svg { width: 15px; height: 15px; flex: none; }
 #editor { flex: 1; min-height: 0; }
 #status { display: flex; gap: 14px; padding: 3px 12px; font-size: 11.5px; color: var(--muted); background: var(--bar); border-top: 1px solid var(--border); }
 #status .grow { flex: 1; }
-#stHint { color: var(--accent); }
+#stHint { color: var(--accent); }#panel { position: fixed; right: 16px; bottom: 34px; width: 440px; max-height: 60vh; overflow: auto; z-index: 50;
+  background: var(--tab-active); color: var(--fg); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.35); padding: 12px 14px; font-size: 12.5px; }
+#panel .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+#panel .head button { height: 22px; padding: 0 6px; }
+#panel .ok { color: #4cc25a; } #panel .bad { color: #e85a64; } #panel .muted { color: var(--muted); }
+#panel ul { margin: 4px 0 8px 18px; padding: 0; } #panel li { margin: 2px 0; }
+#panel code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11.5px; }
+button:disabled { opacity: .5; cursor: progress; }

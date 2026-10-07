@@ -180,7 +180,8 @@
         const end = model.getPositionAt(res.i + res.n);
         const range = new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column);
         return {
-          incomplete: !!res.more,
+          // Immer neu fragen statt alte Listen unscharf weiterzufiltern (sonst "get-recip" -> Get-Recovery…)
+          incomplete: true,
           suggestions: res.items.map((x, idx) => ({
             label: x.l || x.t,
             insertText: x.t,
@@ -294,6 +295,37 @@
     const replace = tabs.length === 1 && !tabs[0].path && !isDirty(tabs[0]) && tabs[0].model.getValue() === WELCOME ? tabs[0] : null;
     createTab({ path, name, content });
     if (replace) { tabs.splice(tabs.indexOf(replace), 1); replace.model.dispose(); renderTabs(); }
+  }
+
+  // ---------------------------------------------------------------- "Befehle laden"
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  function showPanel(title, html) {
+    $('panelTitle').textContent = title;
+    $('panelBody').innerHTML = html;
+    $('panel').hidden = false;
+  }
+
+  async function loadAll() {
+    const btn = $('btnLoad');
+    btn.disabled = true;
+    hint('Lade alle Module für IntelliSense … das kann etwas dauern.');
+    showPanel('Befehle werden geladen …', '<span class="muted">Alle Module und Baupläne werden geladen. Das dauert beim ersten Mal bis zu einer Minute.</span>');
+    const res = await request({ t: 'loadall' }, 4 * 60 * 1000);
+    btn.disabled = false;
+    if (!res || res.error) {
+      showPanel('Laden fehlgeschlagen', '<span class="bad">' + esc(res ? res.error : 'Keine Antwort vom Helfer.') + '</span>');
+      return;
+    }
+    const failed = res.failed || [];
+    const stubs = res.stubs || [];
+    let html = '<div class="ok">✓ ' + (res.commands || 0).toLocaleString('de-DE') + ' Befehle aus ' + (res.loaded || []).length + ' Modulen geladen.</div>';
+    html += stubs.length
+      ? '<div class="muted" style="margin-top:6px">Verbindungs-Befehle: ' + stubs.map(esc).join(', ') + '</div>'
+      : '<div class="muted" style="margin-top:6px">Exchange-/Purview-Befehle wie <code>Get-Recipient</code> fehlen noch: einmal im Terminal mit Exchange bzw. Purview verbinden (z. B. <code>Connect-M365 Exchange</code>), danach erneut laden.</div>';
+    if (failed.length)
+      html += '<div class="bad" style="margin-top:8px">Nicht geladen:</div><ul>' + failed.map(f => '<li><code>' + esc(f.name) + '</code>: ' + esc(f.error) + '</li>').join('') + '</ul>';
+    showPanel('IntelliSense bereit', html);
+    hint('IntelliSense: ' + (res.commands || 0) + ' Befehle geladen');
   }
 
   // ---------------------------------------------------------------- Ausführen
@@ -420,6 +452,8 @@
     $('btnRun').onclick = () => run('all');
     $('btnRunSel').onclick = () => run('selection');
     $('btnStop').onclick = () => post({ t: 'stop' });
+    $('btnLoad').onclick = loadAll;
+    $('panelClose').onclick = () => { $('panel').hidden = true; editor.focus(); };
 
     if (!host) { createTab(); return; }   // ohne App (z. B. im Browser getestet)
 

@@ -112,6 +112,16 @@ public sealed class EditorView : Grid, IDisposable
                 StopRequested?.Invoke();
                 break;
 
+            case "loadall":
+            {
+                var raw = await CompletionService.LoadAllAsync();
+                var node = raw is null ? new JsonObject { ["error"] = "Der IntelliSense-Helfer antwortet nicht (siehe Protokoll)." } : JsonNode.Parse(raw)!.AsObject();
+                node["t"] = "res";
+                node["id"] = id;
+                PostRaw(node.ToJsonString());
+                break;
+            }
+
             case "open":
                 await Task.Yield();   // Dialog erst nach dem WebView2-Ereignis öffnen (sonst Reentrancy)
                 OpenFiles();

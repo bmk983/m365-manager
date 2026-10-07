@@ -26,6 +26,29 @@ public static class CompletionService
     /// <summary>Startet den Helfer vorab (z. B. beim Öffnen des Editors), damit die ersten Vorschläge schnell kommen.</summary>
     public static void WarmUp() => _ = Task.Run(EnsureStartedAsync);
 
+    /// <summary>"Befehle laden": alle Module und Baupläne im Helfer laden. Rohe JSON-Antwort mit Ergebnis oder null.</summary>
+    public static async Task<string?> LoadAllAsync()
+    {
+        var process = await EnsureStartedAsync();
+        if (process is null) return null;
+        var id = Interlocked.Increment(ref _counter);
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Pending[id] = tcs;
+        try
+        {
+            await WriteGate.WaitAsync();
+            try
+            {
+                await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(new { id, cmd = "loadall" }));
+                await process.StandardInput.FlushAsync();
+            }
+            finally { WriteGate.Release(); }
+            var done = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromMinutes(3)));
+            return done == tcs.Task ? await tcs.Task : null;
+        }
+        finally { Pending.TryRemove(id, out _); }
+    }
+
     /// <summary>Liefert die rohe JSON-Antwort (id, i, n, more, items) oder null samt Status.</summary>
     public static async Task<(string? Json, Status Status)> CompleteAsync(string code, int offset)
     {
@@ -106,7 +129,7 @@ public static class CompletionService
 
             var process = Process.Start(psi);
             if (process is null) return null;
-            process.ErrorDataReceived += (_, _) => { };   // stderr leeren, damit nichts blockiert
+            process.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) Log.Write("IntelliSense: " + e.Data); };
             process.BeginErrorReadLine();
             try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
 

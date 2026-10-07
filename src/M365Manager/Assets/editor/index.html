@@ -13,6 +13,7 @@
     <button id="btnNew" title="Neues Skript (Strg+N)"><svg viewBox="0 0 16 16"><path d="M9.5 1.5H4A1.5 1.5 0 0 0 2.5 3v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V5.5z" fill="none" stroke="currentColor"/><path d="M9.5 1.5v4h4M8 7.5v5M5.5 10h5" fill="none" stroke="currentColor"/></svg></button>
     <button id="btnOpen" title="Öffnen (Strg+O)"><svg viewBox="0 0 16 16"><path d="M1.5 12.5v-9a1 1 0 0 1 1-1h3.6l1.5 1.5h5.4a1 1 0 0 1 1 1v1.5M1.5 12.5l2-6h11l-2 6z" fill="none" stroke="currentColor" stroke-linejoin="round"/></svg></button>
     <button id="btnSave" title="Speichern (Strg+S)"><svg viewBox="0 0 16 16"><path d="M2.5 2.5h9l2 2v9h-11z" fill="none" stroke="currentColor" stroke-linejoin="round"/><path d="M5 2.5v3.5h5V2.5M4.5 13.5v-4h7v4" fill="none" stroke="currentColor"/></svg></button>
+    <button id="btnLoad" title="IntelliSense: alle Befehle und Parameter laden"><svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg> Befehle laden</button>
     <span class="sep"></span>
     <button id="btnRun" class="primary" title="Skript ausführen (F5)"><svg viewBox="0 0 16 16"><path d="M4.5 2.8v10.4L13 8z" fill="currentColor"/></svg> Ausführen</button>
     <button id="btnRunSel" title="Auswahl bzw. aktuelle Zeile ausführen (F8)"><svg viewBox="0 0 16 16"><path d="M3.5 3.5v9L10 8z" fill="none" stroke="currentColor" stroke-linejoin="round"/><path d="M12 3.5v9" stroke="currentColor"/></svg> Auswahl</button>
@@ -20,6 +21,10 @@
   </div>
 </div>
 <div id="editor"></div>
+<div id="panel" hidden>
+  <div class="head"><strong id="panelTitle"></strong><button id="panelClose" title="Schließen">✕</button></div>
+  <div id="panelBody"></div>
+</div>
 <div id="status">
   <span id="stFile">Unbenannt</span>
   <span class="grow"></span>
