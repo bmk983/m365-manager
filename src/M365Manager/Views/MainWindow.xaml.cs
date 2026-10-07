@@ -41,6 +41,7 @@ public partial class MainWindow : FluentWindow
     private int _terminalCounter;
     private bool _closed;
     private readonly TokenBroker _tokens;
+    private string _profileIdentity = "";
 
     public string ProfileId => _profile.Id;
 
@@ -48,6 +49,7 @@ public partial class MainWindow : FluentWindow
     {
         _profile = profile;
         _tokens = new TokenBroker(() => _profile, this);
+        _profileIdentity = profile.Upn + "|" + profile.Tenant;
         InitializeComponent();
         SystemThemeWatcher.Watch(this);
 
@@ -91,7 +93,10 @@ public partial class MainWindow : FluentWindow
         if (_closed) return;
         if (ProfileStore.Get(_profile.Id) is { } fresh)
         {
+            var identity = _profileIdentity;
             _profile = fresh;
+            _profileIdentity = fresh.Upn + "|" + fresh.Tenant;
+            if (identity != _profileIdentity) _tokens.Clear();   // anderes Konto/Tenant: keine alten Tokens weiterverwenden
             ApplyProfile();
         }
     });
@@ -280,9 +285,40 @@ public partial class MainWindow : FluentWindow
         core.FaviconChanged += async (_, _) => tab.Icon = await LoadFaviconAsync(core);
         core.NewWindowRequested += OnNewWindowRequested;
         core.WindowCloseRequested += (_, _) => CloseTab(tab);
+        core.ProcessFailed += (_, e) => Dispatcher.BeginInvoke(() => OnBrowserProcessFailed(tab, core, e.ProcessFailedKind));
 
         if (url is not null) core.Navigate(url);
         return tab;
+    }
+
+    /// <summary>Abgestürzte oder hängende Seiten neu laden; ist der ganze Browser-Prozess weg, den Tab neu aufbauen.</summary>
+    private async void OnBrowserProcessFailed(BrowserTab tab, CoreWebView2 core, CoreWebView2ProcessFailedKind kind)
+    {
+        if (_closed || !_tabs.Contains(tab)) return;
+        Log.Write("Browser-Tab " + tab.Url + ": " + kind);
+        try
+        {
+            switch (kind)
+            {
+                case CoreWebView2ProcessFailedKind.RenderProcessExited:
+                case CoreWebView2ProcessFailedKind.RenderProcessUnresponsive:
+                    core.Reload();
+                    break;
+                case CoreWebView2ProcessFailedKind.BrowserProcessExited:
+                    WebViewEnvironments.Forget(_profile.Id, core.Environment);
+                    var (url, key, wasActive) = (tab.Url, tab.PortalKey, tab == _activeTab);
+                    var index = _tabs.IndexOf(tab);
+                    CloseTab(tab);
+                    var fresh = await CreateTabAsync(string.IsNullOrEmpty(url) ? Portal.All[0].Url(_profile) : url, key);
+                    _tabs.Move(_tabs.IndexOf(fresh), Math.Min(index, _tabs.Count - 1));
+                    if (!wasActive && _activeTab == fresh && _tabs.Count > 1) SelectTab(_tabs[Math.Max(0, index - 1)]);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Browser-Wiederherstellung: " + ex.Message);
+        }
     }
 
     /// <summary>

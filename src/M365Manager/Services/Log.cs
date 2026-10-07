@@ -11,7 +11,13 @@ public static class Log
         try
         {
             lock (Gate)
+            {
+                // Bei 2 MB rotieren: eine ältere Datei (.old) bleibt erhalten.
+                var info = new FileInfo(AppPaths.LogFile);
+                if (info.Exists && info.Length > 2 * 1024 * 1024)
+                    File.Move(info.FullName, info.FullName + ".old", overwrite: true);
                 File.AppendAllText(AppPaths.LogFile, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {message}{Environment.NewLine}");
+            }
         }
         catch
         {

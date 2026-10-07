@@ -29,6 +29,13 @@ public partial class App : Application
         DispatcherUnhandledException += OnUnhandledException;
 
         AppPaths.Initialize();
+        AppDomain.CurrentDomain.UnhandledException += (_, args) => Log.Write("Absturz: " + args.ExceptionObject);
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            Log.Write("Hintergrundfehler: " + args.Exception.GetBaseException().Message);
+            args.SetObserved();
+        };
+        Log.Write("Start · Version " + typeof(App).Assembly.GetName().Version + " · Daten: " + AppPaths.DataRoot);
 
         if (!AcquireSingleInstance(e.Args))
         {

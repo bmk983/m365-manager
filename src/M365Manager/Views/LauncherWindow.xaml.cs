@@ -41,7 +41,45 @@ public partial class LauncherWindow : FluentWindow
                 _ = SetupService.EnsureReadyAsync();
             }
             if (ProfileStore.All().Count == 0) StartEdit(null);
+            _ = CheckForUpdateAsync();
         };
+    }
+
+    // ------------------------------------------------------------------ Update-Hinweis
+
+    private const string InstallCommand = "irm https://raw.githubusercontent.com/bmk983/m365-manager/main/install.ps1 | iex";
+    private string? _releaseUrl;
+
+    /// <summary>Fragt GitHub nach der neuesten Version. Rein informativ – es wird nichts automatisch geladen oder ersetzt.</summary>
+    private async Task CheckForUpdateAsync()
+    {
+        var current = typeof(App).Assembly.GetName().Version ?? new Version(0, 0);
+        VersionText.Text = "Version " + current.ToString(3) + " · portabel – nichts wird installiert.";
+        try
+        {
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("M365Manager/" + current.ToString(3));
+            using var doc = System.Text.Json.JsonDocument.Parse(
+                await http.GetStringAsync("https://api.github.com/repos/bmk983/m365-manager/releases/latest"));
+            var tag = doc.RootElement.GetProperty("tag_name").GetString()?.TrimStart('v');
+            if (!Version.TryParse(tag, out var latest)) return;
+            if (new Version(latest.Major, latest.Minor, Math.Max(latest.Build, 0)) <= new Version(current.Major, current.Minor, Math.Max(current.Build, 0))) return;
+
+            _releaseUrl = doc.RootElement.GetProperty("html_url").GetString();
+            UpdateText.Text = "Version " + latest.ToString(3) + " ist verfügbar (du hast " + current.ToString(3) + ").";
+            UpdateBar.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Update-Prüfung: " + ex.Message);   // offline o. Ä. – kein Problem
+        }
+    }
+
+    private void CopyUpdateCommand_Click(object sender, RoutedEventArgs e) => Clipboard.SetText(InstallCommand);
+
+    private void OpenRelease_Click(object sender, RoutedEventArgs e)
+    {
+        if (_releaseUrl is not null) Process.Start(new ProcessStartInfo(_releaseUrl) { UseShellExecute = true });
     }
 
     // ------------------------------------------------------------------ Profile

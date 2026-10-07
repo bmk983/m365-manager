@@ -92,6 +92,13 @@ public sealed class TerminalView : Grid, IDisposable
         };
         core.NewWindowRequested += (_, e) => e.Handled = true;
         core.WebMessageReceived += OnWebMessage;
+        core.ProcessFailed += (_, e) =>
+        {
+            Log.Write("Terminal-Anzeige: " + e.ProcessFailedKind + " (" + e.Reason + ")");
+            // Nur die Anzeige ist betroffen – die PowerShell-Sitzung läuft weiter. Seite neu laden.
+            if (e.ProcessFailedKind is CoreWebView2ProcessFailedKind.RenderProcessExited or CoreWebView2ProcessFailedKind.RenderProcessUnresponsive)
+                Dispatcher.BeginInvoke(() => { try { core.Reload(); } catch (Exception ex) { Log.Write("Terminal-Reload: " + ex.Message); } });
+        };
         core.Navigate("https://terminal.m365m/index.html");
     }
 
@@ -99,7 +106,13 @@ public sealed class TerminalView : Grid, IDisposable
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+        try { HandleWebMessage(e.WebMessageAsJson); }
+        catch (Exception ex) { Log.Write("Terminal-Nachricht: " + ex.Message); }
+    }
+
+    private void HandleWebMessage(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
         switch (root.GetProperty("t").GetString())
         {
@@ -111,6 +124,12 @@ public sealed class TerminalView : Grid, IDisposable
                 {
                     _ready = true;
                     _ = StartShellAsync();
+                }
+                else if (_pty is not null)
+                {
+                    // Anzeige wurde neu geladen (z. B. nach einem Absturz des Renderers) – Sitzung läuft weiter.
+                    _pty.Resize(_cols, _rows);
+                    WriteLocal("\x1b[90m[Anzeige neu geladen – die PowerShell-Sitzung läuft weiter. Enter zeigt die Eingabezeile.]\x1b[0m\r\n");
                 }
                 break;
 
@@ -155,7 +174,7 @@ public sealed class TerminalView : Grid, IDisposable
             }
 
             var profile = _profile();
-            _pipe = new PipeListener(line => Dispatcher.BeginInvoke(() => OnHostMessage(line)), HandleRequestAsync);
+            _pipe = new PipeListener(line => Dispatcher.BeginInvoke(() => OnHostMessage(line)), HandleRequestAsync, () => _pty?.ProcessId);
 
             var bootstrap = Path.Combine(AppPaths.ScriptsDir, "bootstrap.ps1").Replace("'", "''");
             var commandLine = "\"" + pwsh + "\" -NoLogo -NoProfile -NoExit -ExecutionPolicy RemoteSigned -Command \". '" + bootstrap + "'\"";
@@ -182,7 +201,8 @@ public sealed class TerminalView : Grid, IDisposable
             var pty = PtySession.Start(commandLine, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), env, _cols, _rows);
             _pty = pty;
             pty.Output += text => OnPtyOutput(pty, text);
-            pty.Exited += code => Dispatcher.BeginInvoke(() => OnExited(pty, code));            pty.Run();
+            pty.Exited += code => Dispatcher.BeginInvoke(() => OnExited(pty, code));
+            pty.Run();
 
         }
         catch (Exception ex)

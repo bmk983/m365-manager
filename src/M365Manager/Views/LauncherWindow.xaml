@@ -96,8 +96,23 @@
                 <Border x:Name="EnvCard" Style="{StaticResource CardBorder}" Padding="20" VerticalAlignment="Top">
                     <StackPanel>
                         <TextBlock Text="Umgebung" FontSize="17" FontWeight="SemiBold" />
-                        <TextBlock Text="Portabel – nichts wird installiert." FontSize="12" Margin="0,2,0,14"
+                        <TextBlock x:Name="VersionText" Text="Portabel – nichts wird installiert." FontSize="12" Margin="0,2,0,14"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+
+                        <Border x:Name="UpdateBar" Visibility="Collapsed" CornerRadius="6" Padding="12,10" Margin="0,0,0,14"
+                                Background="{DynamicResource SubtleFillColorSecondaryBrush}"
+                                BorderBrush="{DynamicResource AccentTextFillColorPrimaryBrush}" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock x:Name="UpdateText" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock FontSize="11" Margin="0,3,0,8" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           Text="App schließen und den Installationsbefehl erneut in PowerShell ausführen." />
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:Button Content="Befehl kopieren" Icon="{ui:SymbolIcon Copy20}" Appearance="Primary"
+                                               Click="CopyUpdateCommand_Click" Margin="0,0,8,0" />
+                                    <ui:Button Content="Was ist neu?" Icon="{ui:SymbolIcon Open20}" Click="OpenRelease_Click" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
 
                         <Grid Margin="0,0,0,10">
                             <Grid.ColumnDefinitions>

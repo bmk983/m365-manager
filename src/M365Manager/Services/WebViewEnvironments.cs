@@ -34,4 +34,14 @@ public static class WebViewEnvironments
             return task;
         }
     }
+
+    /// <summary>Vergisst eine Umgebung, deren Browser-Prozess beendet wurde – beim nächsten Zugriff wird sie neu erstellt.</summary>
+    public static void Forget(string profileId, CoreWebView2Environment dead)
+    {
+        lock (Profiles)
+        {
+            if (Profiles.TryGetValue(profileId, out var task) && task.IsCompletedSuccessfully && ReferenceEquals(task.Result, dead))
+                Profiles.Remove(profileId);
+        }
+    }
 }

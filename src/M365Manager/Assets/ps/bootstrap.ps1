@@ -145,6 +145,7 @@ function Connect-M365 {
             continue
         }
 
+        $wasConnected = $global:M365.State[$svc] -eq 'connected'
         $global:M365.Busy = $true
         Set-M365State $svc 'connecting'
         if (-not $Quiet) {
@@ -153,6 +154,13 @@ function Connect-M365 {
         }
 
         try {
+            $module = $global:M365ModuleFor[$svc]
+            if (-not (Get-Module -ListAvailable $module)) {
+                throw "Das Modul $module fehlt. Beheben: Install-M365Module $module  (oder im Startfenster 'Nach Updates suchen')"
+            }
+            # Beim Erneuern die alte Exchange-/Purview-Verbindung zuerst trennen, sonst sammeln sich Sitzungen an.
+            if ($wasConnected -and $svc -in 'Exchange', 'Purview') { Disconnect-M365ExoConnection -Compliance:($svc -eq 'Purview') }
+
             $detail = $upn
             $global:M365.Expiry.Remove($svc)
             $tokenOk = $false
@@ -184,6 +192,24 @@ function Connect-M365 {
         finally {
             $global:M365.Busy = $false
         }
+    }
+}
+
+$global:M365ModuleFor = @{
+    Graph      = 'Microsoft.Graph.Authentication'
+    Exchange   = 'ExchangeOnlineManagement'
+    Purview    = 'ExchangeOnlineManagement'
+    Teams      = 'MicrosoftTeams'
+    SharePoint = 'PnP.PowerShell'
+}
+
+# Trennt nur die Exchange- bzw. Purview-Verbindung(en), die jeweils andere bleibt bestehen.
+function Disconnect-M365ExoConnection([switch]$Compliance) {
+    if (-not (Get-Module ExchangeOnlineManagement)) { return }
+    $conns = @(Get-ConnectionInformation -ErrorAction SilentlyContinue |
+        Where-Object { ($_.ConnectionUri -match 'compliance|protection') -eq [bool]$Compliance })
+    foreach ($c in $conns) {
+        try { Disconnect-ExchangeOnline -ConnectionId $c.ConnectionId -Confirm:$false -ErrorAction Stop | Out-Null } catch { }
     }
 }
 
@@ -545,6 +571,9 @@ Write-Host "  `e[90mConnect-M365 · Disconnect-M365 · Get-M365Status · `e[0mGe
 $missing = @('Microsoft.Graph.Authentication', 'ExchangeOnlineManagement', 'MicrosoftTeams', 'PnP.PowerShell') |
     Where-Object { -not (Get-Module -ListAvailable $_) }
 if ($missing) { Write-Host "  `e[33m⚠ Module fehlen noch: $($missing -join ', ') – Einrichtung im Startfenster prüfen.`e[0m" }
+
+# Kanal zur App sofort belegen – die App akzeptiert nur diesen PowerShell-Prozess.
+if ($env:M365M_PIPE) { try { Open-M365Channel } catch { } }
 
 $custom = Join-Path $env:M365M_DATA 'custom.ps1'
 if (Test-Path $custom) { . $custom }
