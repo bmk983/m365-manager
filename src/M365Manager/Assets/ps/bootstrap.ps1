@@ -26,6 +26,8 @@ $global:M365 = @{
     Busy        = $false
     AutoConnect = $true
     TokenMode   = $true
+    InterceptConnect = $true
+    SpUrl       = $null
     Expiry      = @{}
     Verbs       = @(Get-Verb | ForEach-Object Verb)
 }
@@ -73,7 +75,7 @@ function Get-M365Token {
         Holt ein Token aus der Browser-Anmeldung dieses Profils (ohne erneute Anmeldung / MFA, solange der Browser angemeldet ist).
     #>
     param(
-        [Parameter(Mandatory)][ValidateSet('Graph', 'Exchange', 'Purview', 'Teams', 'TeamsGraph', 'SharePoint')][string]$Service,
+        [Parameter(Mandatory)][ValidateSet('Graph', 'Exchange', 'Purview', 'Teams', 'TeamsGraph', 'SharePoint', 'SharePointSite')][string]$Service,
         [string[]]$ExtraScopes
     )
     if (-not $env:M365M_PIPE) { throw 'Kein Kanal zur App vorhanden.' }
@@ -169,7 +171,7 @@ function Connect-M365 {
                     $expires = Connect-M365WithToken $svc $Scopes
                     $global:M365.Expiry[$svc] = $expires
                     $tokenOk = $true
-                    if ($svc -eq 'SharePoint') { $detail = "https://$($global:M365.SpTenant)-admin.sharepoint.com" }
+                    if ($svc -eq 'SharePoint') { $detail = if ($global:M365.SpUrl) { $global:M365.SpUrl } else { "https://$($global:M365.SpTenant)-admin.sharepoint.com" } }
                 }
                 catch {
                     Write-M365 "Übernahme der Browser-Anmeldung nicht möglich: $($_.Exception.Message)" DarkYellow
@@ -256,34 +258,36 @@ function Connect-M365WithToken([string]$Svc, [string[]]$Scopes) {
     switch ($Svc) {
         'Graph' {
             $t = Get-M365Token Graph -ExtraScopes $Scopes
-            Connect-MgGraph -AccessToken (ConvertTo-SecureString $t.Token -AsPlainText -Force) -NoWelcome -ErrorAction Stop
+            Microsoft.Graph.Authentication\Connect-MgGraph -AccessToken (ConvertTo-SecureString $t.Token -AsPlainText -Force) -NoWelcome -ErrorAction Stop
             return $t.ExpiresOn
         }
         'Exchange' {
             $t = Get-M365Token Exchange
             $p = @{ AccessToken = $t.Token; Organization = $tenant; ShowBanner = $false; ErrorAction = 'Stop' }
-            Connect-ExchangeOnline @p
+            ExchangeOnlineManagement\Connect-ExchangeOnline @p
             return $t.ExpiresOn
         }
         'Purview' {
-            $cmd = Get-Command Connect-IPPSSession
+            $cmd = Get-Command ExchangeOnlineManagement\Connect-IPPSSession
             if (-not $cmd.Parameters.ContainsKey('AccessToken')) { throw 'Diese Version von Connect-IPPSSession kann keine Tokens übernehmen.' }
             $t = Get-M365Token Purview
             $p = @{ AccessToken = $t.Token; Organization = $tenant; ErrorAction = 'Stop' }
             if ($cmd.Parameters.ContainsKey('ShowBanner')) { $p.ShowBanner = $false }
-            Connect-IPPSSession @p
+            ExchangeOnlineManagement\Connect-IPPSSession @p
             return $t.ExpiresOn
         }
         'Teams' {
             $g = Get-M365Token TeamsGraph
             $t = Get-M365Token Teams
-            Connect-MicrosoftTeams -AccessTokens @($g.Token, $t.Token) -ErrorAction Stop | Out-Null
+            MicrosoftTeams\Connect-MicrosoftTeams -AccessTokens @($g.Token, $t.Token) -ErrorAction Stop | Out-Null
             return @($g.ExpiresOn, $t.ExpiresOn) | Sort-Object | Select-Object -First 1
         }
         'SharePoint' {
             Initialize-M365SharePoint
-            $t = Get-M365Token SharePoint
-            Connect-PnPOnline -Url "https://$($global:M365.SpTenant)-admin.sharepoint.com" -AccessToken $t.Token -ErrorAction Stop
+            # Standard: Admin-Site. Hat ein Skript per Connect-PnPOnline -Url eine andere Site gewählt, diese verwenden.
+            $url = if ($global:M365.SpUrl) { $global:M365.SpUrl } else { "https://$($global:M365.SpTenant)-admin.sharepoint.com" }
+            $t = if ($global:M365.SpUrl) { Get-M365Token SharePointSite -ExtraScopes ([uri]$url).Host } else { Get-M365Token SharePoint }
+            PnP.PowerShell\Connect-PnPOnline -Url $url -AccessToken $t.Token -ErrorAction Stop
             return $t.ExpiresOn
         }
     }
@@ -299,11 +303,11 @@ function Connect-M365Classic([string]$Svc, [string[]]$Scopes) {
             $sc = if ($Scopes) { @($global:M365.GraphScopes) + $Scopes | Select-Object -Unique } else { $global:M365.GraphScopes }
             if ($sc) { $p.Scopes = $sc }
             if ($tenant) { $p.TenantId = $tenant }
-            try { Connect-MgGraph @p }
+            try { Microsoft.Graph.Authentication\Connect-MgGraph @p }
             catch {
                 if ($_.Exception.Message -notmatch 'WAM|broker|window handle') { throw }
                 Set-MgGraphOption -DisableLoginByWAM $true
-                Connect-MgGraph @p
+                Microsoft.Graph.Authentication\Connect-MgGraph @p
             }
             $ctx = Get-MgContext
             if (-not $ctx) { throw 'Keine Graph-Verbindung.' }
@@ -312,32 +316,140 @@ function Connect-M365Classic([string]$Svc, [string[]]$Scopes) {
         'Exchange' {
             $p = @{ ShowBanner = $false; ErrorAction = 'Stop' }
             if ($upn) { $p.UserPrincipalName = $upn }
-            Connect-ExchangeOnline @p
+            ExchangeOnlineManagement\Connect-ExchangeOnline @p
             return $upn
         }
         'Purview' {
-            $cmd = Get-Command Connect-IPPSSession
+            $cmd = Get-Command ExchangeOnlineManagement\Connect-IPPSSession
             $p = @{ ErrorAction = 'Stop' }
             if ($upn) { $p.UserPrincipalName = $upn }
             if ($cmd.Parameters.ContainsKey('ShowBanner')) { $p.ShowBanner = $false }
-            Connect-IPPSSession @p
+            ExchangeOnlineManagement\Connect-IPPSSession @p
             return $upn
         }
         'Teams' {
             $p = @{ ErrorAction = 'Stop' }
             if ($upn) { $p.AccountId = $upn }
-            $r = Connect-MicrosoftTeams @p
+            $r = MicrosoftTeams\Connect-MicrosoftTeams @p
             if ($r.Account) { return "$($r.Account)" }
             return $upn
         }
         'SharePoint' {
             Initialize-M365SharePoint
             $url = "https://$($global:M365.SpTenant)-admin.sharepoint.com"
-            Connect-PnPOnline -Url $url -Interactive -ClientId $global:M365.PnPClientId -ErrorAction Stop
+            PnP.PowerShell\Connect-PnPOnline -Url $url -Interactive -ClientId $global:M365.PnPClientId -ErrorAction Stop
             return $url
         }
     }
 }
+# ------------------------------------------------------------------ Connect-* aus Skripten übernehmen
+# Skripte rufen oft Connect-MgGraph, Connect-ExchangeOnline … auf. Diese Funktionen fangen solche Aufrufe ab
+# und nutzen die Anmeldung aus dem Browser des Profils – ohne erneute Anmeldung/MFA. Ist der Dienst schon
+# verbunden, bleibt die Verbindung bestehen. Aufrufe mit App-Anmeldung (Zertifikat, Secret, Managed Identity),
+# anderem Konto oder anderem Tenant gehen unverändert an das Original-Cmdlet.
+# Abschalten: Set-M365ConnectOverride $false
+
+function ConvertFrom-M365Arguments([object[]]$Arguments) {
+    $named = @{}
+    $positional = [System.Collections.Generic.List[object]]::new()
+    for ($i = 0; $i -lt $Arguments.Count; $i++) {
+        $a = $Arguments[$i]
+        if ($a -is [string] -and $a -match '^-([A-Za-z]\w*)(:)?$') {
+            $name = $Matches[1]
+            $next = if ($i + 1 -lt $Arguments.Count) { $Arguments[$i + 1] } else { $null }
+            $nextIsName = $next -is [string] -and $next -match '^-[A-Za-z]'
+            if ($Matches[2] -or ($i + 1 -lt $Arguments.Count -and -not $nextIsName)) { $named[$name] = $next; $i++ }
+            else { $named[$name] = $true }
+        }
+        else { $positional.Add($a) }
+    }
+    [pscustomobject]@{ Named = $named; Positional = $positional }
+}
+
+function Test-M365SameValue($Value, [string]$Expected) {
+    -not $Value -or ($Expected -and "$Value".Trim().Equals($Expected.Trim(), [StringComparison]::OrdinalIgnoreCase))
+}
+
+function Invoke-M365Intercepted {
+    param([string]$Service, [string]$Native, [object[]]$Arguments, [string[]]$Allowed, [scriptblock]$Condition, [scriptblock]$Action)
+    $p = ConvertFrom-M365Arguments $Arguments
+    $foreign = @($p.Named.Keys | Where-Object { $_ -notin $Allowed })
+    $take = $global:M365.InterceptConnect -and $env:M365M_PIPE -and $foreign.Count -eq 0 -and $p.Positional.Count -eq 0 -and (& $Condition $p.Named)
+    if (-not $take) {
+        & $Native @Arguments
+        return
+    }
+    $name = ($Native -split '\\')[-1]
+    Write-M365 "↪ $name → Anmeldung aus dem Browser des Profils (M365 Manager)" DarkGray
+    & $Action $p.Named
+}
+
+function global:Connect-MgGraph {
+    Invoke-M365Intercepted -Service Graph -Native 'Microsoft.Graph.Authentication\Connect-MgGraph' -Arguments $args `
+        -Allowed 'Scopes', 'NoWelcome', 'TenantId', 'ContextScope' `
+        -Condition { param($n) Test-M365SameValue $n.TenantId $global:M365.Tenant } `
+        -Action {
+            param($n)
+            $wanted = @($n.Scopes | ForEach-Object { "$_" -split '[,\s]+' } | Where-Object { $_ })
+            if ($global:M365.State.Graph -eq 'connected') {
+                $have = @((Get-MgContext).Scopes)
+                $missing = @($wanted | Where-Object { $have -notcontains $_ })
+                if (-not $missing) { Write-M365 '✓ Graph ist bereits verbunden – Verbindung wird weiterverwendet.' DarkGray; return }
+                Connect-M365 Graph -Scopes $missing -Force
+            }
+            else { Connect-M365 Graph -Scopes $wanted }
+        }
+}
+
+function global:Connect-ExchangeOnline {
+    Invoke-M365Intercepted -Service Exchange -Native 'ExchangeOnlineManagement\Connect-ExchangeOnline' -Arguments $args `
+        -Allowed 'UserPrincipalName', 'ShowBanner', 'ShowProgress', 'SkipLoadingFormatData', 'SkipLoadingCmdletHelp', 'DisableWAM' `
+        -Condition { param($n) Test-M365SameValue $n.UserPrincipalName $global:M365.Upn } `
+        -Action { if ($global:M365.State.Exchange -eq 'connected') { Write-M365 '✓ Exchange ist bereits verbunden – Verbindung wird weiterverwendet.' DarkGray } else { Connect-M365 Exchange } }
+}
+
+function global:Connect-IPPSSession {
+    Invoke-M365Intercepted -Service Purview -Native 'ExchangeOnlineManagement\Connect-IPPSSession' -Arguments $args `
+        -Allowed 'UserPrincipalName', 'ShowBanner', 'DisableWAM' `
+        -Condition { param($n) Test-M365SameValue $n.UserPrincipalName $global:M365.Upn } `
+        -Action { if ($global:M365.State.Purview -eq 'connected') { Write-M365 '✓ Purview ist bereits verbunden – Verbindung wird weiterverwendet.' DarkGray } else { Connect-M365 Purview } }
+}
+
+function global:Connect-MicrosoftTeams {
+    Invoke-M365Intercepted -Service Teams -Native 'MicrosoftTeams\Connect-MicrosoftTeams' -Arguments $args `
+        -Allowed 'AccountId', 'TenantId' `
+        -Condition { param($n) (Test-M365SameValue $n.AccountId $global:M365.Upn) -and (Test-M365SameValue $n.TenantId $global:M365.Tenant) } `
+        -Action { if ($global:M365.State.Teams -eq 'connected') { Write-M365 '✓ Teams ist bereits verbunden – Verbindung wird weiterverwendet.' DarkGray } else { Connect-M365 Teams } }
+}
+
+function global:Connect-PnPOnline {
+    Invoke-M365Intercepted -Service SharePoint -Native 'PnP.PowerShell\Connect-PnPOnline' -Arguments $args `
+        -Allowed 'Url', 'Interactive', 'ClientId', 'Tenant', 'LaunchBrowser' `
+        -Condition {
+            param($n)
+            $n.Url -and "$($n.Url)" -match '^https://[a-z0-9-]+(-admin|-my)?\.sharepoint\.com(/|$)' -and
+            ((-not $n.ClientId) -or (Test-M365SameValue $n.ClientId $global:M365.PnPClientId))
+        } `
+        -Action {
+            param($n)
+            $url = "$($n.Url)".TrimEnd('/')
+            $admin = $url -match '^https://[^/]+-admin\.sharepoint\.com$'
+            $current = if ($global:M365.SpUrl) { $global:M365.SpUrl } else { "https://$($global:M365.SpTenant)-admin.sharepoint.com" }
+            if ($global:M365.State.SharePoint -eq 'connected' -and $current -eq $url) {
+                Write-M365 '✓ SharePoint ist bereits mit dieser Site verbunden.' DarkGray
+                return
+            }
+            if ($url -match '^https://([a-z0-9-]+?)(-admin|-my)?\.sharepoint\.com' -and -not $global:M365.SpTenant) { $global:M365.SpTenant = $Matches[1] }
+            $global:M365.SpUrl = if ($admin) { $null } else { $url }
+            Connect-M365 SharePoint -Force
+        }
+}
+
+function Set-M365ConnectOverride([bool]$Enabled = $true) {
+    $global:M365.InterceptConnect = $Enabled
+    Write-M365 ("Connect-* aus Skripten nutzen die Browser-Anmeldung: " + $(if ($Enabled) { 'an.' } else { 'aus.' })) Cyan
+}
+
 function Disconnect-M365 {
     [CmdletBinding()]
     param(
@@ -493,6 +605,7 @@ function Get-M365Help {
     Write-Host "  Disconnect-M365 [Dienst|All]                                trennen"
     Write-Host "  Get-M365Status                                               Verbindungsstatus"
     Write-Host "  Set-M365AutoConnect `$false                                  Auto-Verbinden aus"
+    Write-Host "  Set-M365ConnectOverride `$false                              Connect-* aus Skripten nicht abfangen"
     Write-Host "  Register-M365PnPApp                                         PnP-App im Tenant anlegen"
     Write-Host "  Install-M365Module <Name>                                   weiteres Modul portabel laden"
     Write-Host ''

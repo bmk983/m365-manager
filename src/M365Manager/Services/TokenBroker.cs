@@ -69,6 +69,15 @@ public sealed class TokenBroker
                 if (string.IsNullOrWhiteSpace(p.PnPClientId)) throw new TokenException("Für SharePoint fehlt die PnP ClientId im Profil.");
                 var sp = p.EffectiveSharePointTenant ?? throw new TokenException("SharePoint-Tenantname ist unbekannt.");
                 return (p.PnPClientId!, "https://" + sp + "-admin.sharepoint.com/.default", "SharePoint");
+            case "SharePointSite":
+            {
+                // Beliebige Site des Tenants (Connect-PnPOnline -Url …) – nur *.sharepoint.com
+                if (string.IsNullOrWhiteSpace(p.PnPClientId)) throw new TokenException("Für SharePoint fehlt die PnP ClientId im Profil.");
+                var host = (extraScopes ?? "").Trim().ToLowerInvariant();
+                if (!System.Text.RegularExpressions.Regex.IsMatch(host, @"^[a-z0-9-]+\.sharepoint\.com$"))
+                    throw new TokenException("Ungültige SharePoint-Adresse: " + host);
+                return (p.PnPClientId!, "https://" + host + "/.default", "SharePoint");
+            }
             default:
                 throw new TokenException("Unbekannter Dienst: " + target);
         }
