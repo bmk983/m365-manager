@@ -36,8 +36,28 @@ $global:M365Roles = [ordered]@{
 
 function Get-M365RoleId([string]$Key) { $global:M365Roles[$Key].Id }
 
+# Kennzeichen für Schutzgründe, die keine Rolle sind
+$global:M365ProtectionMarkers = @{
+    'role-assignable-group' = 'Mitglied einer rollenzuweisbaren Gruppe'
+    'restricted-au'         = 'in einer Verwaltungseinheit mit eingeschränkter Verwaltung'
+}
+$global:M365RoleNameCache = $null
+
 function Get-M365RoleName([string]$Id) {
     foreach ($r in $global:M365Roles.Values) { if ($r.Id -eq $Id) { return $r.Name } }
+    if ($global:M365ProtectionMarkers.ContainsKey($Id)) { return $global:M365ProtectionMarkers[$Id] }
+    # Unbekannte Rolle (z. B. Dynamics 365 Business Central Administrator): Namen einmalig aus dem Verzeichnis laden
+    if ($null -eq $global:M365RoleNameCache) {
+        $global:M365RoleNameCache = @{}
+        try {
+            foreach ($d in (Invoke-M365GraphGet 'v1.0/roleManagement/directory/roleDefinitions?$select=id,templateId,displayName').value) {
+                $global:M365RoleNameCache["$($d.templateId)"] = $d.displayName
+                $global:M365RoleNameCache["$($d.id)"] = $d.displayName
+            }
+        }
+        catch { }
+    }
+    if ($global:M365RoleNameCache.ContainsKey($Id)) { return $global:M365RoleNameCache[$Id] }
     return $Id
 }
 
@@ -192,10 +212,27 @@ function Get-M365LiveRoleIds {
     catch { return $null }
 }
 
-# Rollen des Zielkontos (inkl. gruppenbasierter Zuweisungen). $null = unbekannt.
+# Alles, was ein Zielkonto für Microsoft "privilegiert" macht. $null = unbekannt.
+#  - aktive Rollen (direkt und über Gruppen)
+#  - per PIM berechtigte Rollen (auch wenn gerade nicht aktiv)
+#  - Mitgliedschaft in einer rollenzuweisbaren Gruppe
+#  - Mitgliedschaft in einer Verwaltungseinheit mit eingeschränkter Verwaltung
 function Get-M365TargetRoleIds([string]$UserId) {
     if (-not $UserId) { return $null }
-    try { return @((Invoke-M365GraphGet ("v1.0/users/{0}/transitiveMemberOf/microsoft.graph.directoryRole?`$select=roleTemplateId" -f [uri]::EscapeDataString($UserId))).value.roleTemplateId) }
+    $id = [uri]::EscapeDataString($UserId)
+    try {
+        $user = Invoke-M365GraphGet "v1.0/users/$id`?`$select=id"
+        $result = [System.Collections.Generic.List[string]]::new()
+        foreach ($r in (Invoke-M365GraphGet "v1.0/users/$($user.id)/transitiveMemberOf/microsoft.graph.directoryRole?`$select=roleTemplateId").value) { $result.Add("$($r.roleTemplateId)") }
+        try { foreach ($e in (Invoke-M365GraphGet "v1.0/roleManagement/directory/roleEligibilityScheduleInstances?`$filter=principalId eq '$($user.id)'").value) { $result.Add("$($e.roleDefinitionId)") } } catch { }
+        try {
+            if (@((Invoke-M365GraphGet "v1.0/users/$($user.id)/transitiveMemberOf/microsoft.graph.group?`$select=id,isAssignableToRole").value | Where-Object { $_.isAssignableToRole }).Count) { $result.Add('role-assignable-group') }
+        } catch { }
+        try {
+            if (@((Invoke-M365GraphGet "v1.0/users/$($user.id)/memberOf/microsoft.graph.administrativeUnit?`$select=id,isMemberManagementRestricted").value | Where-Object { $_.isMemberManagementRestricted }).Count) { $result.Add('restricted-au') }
+        } catch { }
+        return @($result | Where-Object { $_ } | Select-Object -Unique)
+    }
     catch { return $null }
 }
 
@@ -265,6 +302,10 @@ function Get-M365OperationStatus {
 
             if ($def.Rule -and $null -ne $TargetRoleIds) {
                 $r.TargetRoles = @($TargetRoleIds | ForEach-Object { Get-M365RoleName $_ })
+                # Eingeschränkte Verwaltungseinheit: sperrt auch tenantweite Global-/Privileged-Admins aus
+                if ($TargetRoleIds -contains 'restricted-au') {
+                    return & $done 'TargetIsPrivileged' 'Der Zielbenutzer liegt in einer Verwaltungseinheit mit eingeschränkter Verwaltung. Ändern dürfen ihn nur Administratoren, die für diese Verwaltungseinheit zugewiesen sind – tenantweite Rollen (auch Global Administrator) reichen nicht.'
+                }
                 $rules = $global:M365TargetRules[$def.Rule]
                 $mayAll = $false
                 $manageable = @()
@@ -276,7 +317,11 @@ function Get-M365OperationStatus {
                     $manageableIds = @($manageable | ForEach-Object { Get-M365RoleId $_ })
                     $blocking = @($TargetRoleIds | Where-Object { $_ -and $global:M365DefaultUserRoleIds -notcontains $_ -and $manageableIds -notcontains $_ })
                     if ($blocking) {
-                        return & $done 'TargetIsPrivileged' ("Der Zielbenutzer besitzt eine administrative Rolle (" + (($blocking | ForEach-Object { Get-M365RoleName $_ }) -join ', ') + "). $($r.AuthorizedByRole) reicht für dieses Zielkonto nicht aus – dafür wird Privileged Authentication Administrator (oder Global Administrator) benötigt.")
+                        $reasons = ($blocking | ForEach-Object { Get-M365RoleName $_ }) -join ', '
+                        if ($blocking -contains 'restricted-au') {
+                            return & $done 'TargetIsPrivileged' "Der Zielbenutzer ist geschützt ($reasons). Ändern dürfen ihn nur Administratoren, die für diese Verwaltungseinheit zugewiesen sind."
+                        }
+                        return & $done 'TargetIsPrivileged' ("Der Zielbenutzer ist ein privilegiertes Konto ($reasons). $($r.AuthorizedByRole) reicht für dieses Zielkonto nicht aus – dafür wird Privileged Authentication Administrator (oder Global Administrator) benötigt.")
                     }
                 }
             }

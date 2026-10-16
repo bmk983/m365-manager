@@ -130,6 +130,38 @@ Describe 'Zielkonto' {
         $s.Message | Should -Match 'Privileged Authentication Administrator'
         $s.TargetRoles | Should -Be @('Global Administrator')
     }
+    It 'Ziel mit unbekannter Admin-Rolle (Business Central Administrator) ist geschützt – mit Klarnamen' {
+        $bcAdmin = '963797fb-eb3b-4cde-8ce3-5878b3f32a3f'
+        Mock Invoke-M365GraphGet { [pscustomobject]@{ value = @([pscustomobject]@{ id = $bcAdmin; templateId = $bcAdmin; displayName = 'Dynamics 365 Business Central Administrator' }) } }
+        $global:M365RoleNameCache = $null
+        $t = ConvertFrom-M365Jwt (New-TestToken -Scopes 'UserAuthenticationMethod.ReadWrite.All' -Roles $AuthAdmin, $UserAdmin)
+        $s = Get-M365OperationStatus -Operation 'AuthMethods.Write' -Token $t -CallerRoleIds $t.RoleIds -TargetRoleIds @($bcAdmin) -TargetUser 'svc@contoso.com'
+        $s.Status | Should -Be 'TargetIsPrivileged'
+        $s.Message | Should -Match 'Dynamics 365 Business Central Administrator'
+        $s.Message | Should -Match 'Privileged Authentication Administrator'
+    }
+    It 'Zielkonto: PIM-berechtigte Rollen, rollenzuweisbare Gruppen und eingeschränkte Verwaltungseinheiten zählen mit' {
+        Mock Invoke-M365GraphGet {
+            switch -Wildcard ($Uri) {
+                '*select=id' { [pscustomobject]@{ id = 'u1' } }
+                '*microsoft.graph.directoryRole*' { [pscustomobject]@{ value = @() } }
+                '*roleEligibilityScheduleInstances*' { [pscustomobject]@{ value = @([pscustomobject]@{ roleDefinitionId = '62e90394-69f5-4237-9190-012177145e10' }) } }
+                '*microsoft.graph.group*' { [pscustomobject]@{ value = @([pscustomobject]@{ id = 'g1'; isAssignableToRole = $true }) } }
+                '*administrativeUnit*' { [pscustomobject]@{ value = @([pscustomobject]@{ id = 'a1'; isMemberManagementRestricted = $true }) } }
+            }
+        }
+        $ids = Get-M365TargetRoleIds 'svc@contoso.com'
+        $ids | Should -Contain '62e90394-69f5-4237-9190-012177145e10'
+        $ids | Should -Contain 'role-assignable-group'
+        $ids | Should -Contain 'restricted-au'
+        $t = ConvertFrom-M365Jwt (New-TestToken -Scopes 'UserAuthenticationMethod.ReadWrite.All' -Roles $AuthAdmin)
+        $s = Get-M365OperationStatus -Operation 'AuthMethods.Write' -Token $t -CallerRoleIds $t.RoleIds -TargetRoleIds $ids
+        $s.Status | Should -Be 'TargetIsPrivileged'
+        $s.Message | Should -Match 'Verwaltungseinheit'
+        # … auch mit Global Administrator
+        $ga = ConvertFrom-M365Jwt (New-TestToken -Scopes 'UserAuthenticationMethod.ReadWrite.All' -Roles $GlobalAdmin)
+        (Get-M365OperationStatus -Operation 'AuthMethods.Write' -Token $ga -CallerRoleIds $ga.RoleIds -TargetRoleIds @('restricted-au')).Status | Should -Be 'TargetIsPrivileged'
+    }
     It 'Ziel ist privilegiert – mit Privileged Authentication Administrator erlaubt' {
         $t = ConvertFrom-M365Jwt (New-TestToken -Scopes 'UserAuthenticationMethod.ReadWrite.All' -Roles $PrivAuthAdmin)
         (Get-M365OperationStatus -Operation 'AuthMethods.Write' -Token $t -CallerRoleIds $t.RoleIds -TargetRoleIds @($GlobalAdmin)).Status | Should -Be 'Allowed'
