@@ -225,6 +225,8 @@ function Get-M365TargetRoleIds([string]$UserId) {
         $result = [System.Collections.Generic.List[string]]::new()
         foreach ($r in (Invoke-M365GraphGet "v1.0/users/$($user.id)/transitiveMemberOf/microsoft.graph.directoryRole?`$select=roleTemplateId").value) { $result.Add("$($r.roleTemplateId)") }
         try { foreach ($e in (Invoke-M365GraphGet "v1.0/roleManagement/directory/roleEligibilityScheduleInstances?`$filter=principalId eq '$($user.id)'").value) { $result.Add("$($e.roleDefinitionId)") } } catch { }
+        # Direkte Zuweisungen inkl. benutzerdefinierter Rollen (die erscheinen nicht als directoryRole)
+        try { foreach ($a in (Invoke-M365GraphGet "v1.0/roleManagement/directory/roleAssignments?`$filter=principalId eq '$($user.id)'").value) { $result.Add("$($a.roleDefinitionId)") } } catch { }
         try {
             if (@((Invoke-M365GraphGet "v1.0/users/$($user.id)/transitiveMemberOf/microsoft.graph.group?`$select=id,isAssignableToRole").value | Where-Object { $_.isAssignableToRole }).Count) { $result.Add('role-assignable-group') }
         } catch { }

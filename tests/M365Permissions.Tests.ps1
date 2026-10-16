@@ -146,6 +146,7 @@ Describe 'Zielkonto' {
                 '*select=id' { [pscustomobject]@{ id = 'u1' } }
                 '*microsoft.graph.directoryRole*' { [pscustomobject]@{ value = @() } }
                 '*roleEligibilityScheduleInstances*' { [pscustomobject]@{ value = @([pscustomobject]@{ roleDefinitionId = '62e90394-69f5-4237-9190-012177145e10' }) } }
+                '*roleAssignments*' { [pscustomobject]@{ value = @([pscustomobject]@{ roleDefinitionId = 'c0ffee00-0000-0000-0000-00000000c0de' }) } }   # benutzerdefinierte Rolle
                 '*microsoft.graph.group*' { [pscustomobject]@{ value = @([pscustomobject]@{ id = 'g1'; isAssignableToRole = $true }) } }
                 '*administrativeUnit*' { [pscustomobject]@{ value = @([pscustomobject]@{ id = 'a1'; isMemberManagementRestricted = $true }) } }
             }
@@ -153,6 +154,7 @@ Describe 'Zielkonto' {
         $ids = Get-M365TargetRoleIds 'svc@contoso.com'
         $ids | Should -Contain '62e90394-69f5-4237-9190-012177145e10'
         $ids | Should -Contain 'role-assignable-group'
+        $ids | Should -Contain 'c0ffee00-0000-0000-0000-00000000c0de'
         $ids | Should -Contain 'restricted-au'
         $t = ConvertFrom-M365Jwt (New-TestToken -Scopes 'UserAuthenticationMethod.ReadWrite.All' -Roles $AuthAdmin)
         $s = Get-M365OperationStatus -Operation 'AuthMethods.Write' -Token $t -CallerRoleIds $t.RoleIds -TargetRoleIds $ids
