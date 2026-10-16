@@ -207,6 +207,51 @@ Describe 'Inkrementeller Consent und frischer Token' {
     }
 }
 
+Describe 'Keine Rückstufung auf Lesezugriff' {
+    BeforeEach {
+        $global:M365.ExtraGraphScopes = @()
+        $script:Requested = [System.Collections.Generic.List[string]]::new()
+        Mock Get-M365Token { $script:Requested.Add(($ExtraScopes -join ' ')); [pscustomobject]@{ Token = (New-TestToken -Scopes ($BaseScopes + $ExtraScopes) -Roles $AuthAdmin); ExpiresOn = [DateTimeOffset]::UtcNow.AddHours(1) } }
+        Mock Connect-M365GraphNative { }
+    }
+    It 'einmal angeforderte Schreib-Scopes bleiben bei jeder späteren Verbindung erhalten' {
+        Connect-M365WithToken Graph @('UserAuthenticationMethod.ReadWrite.All') | Out-Null
+        Connect-M365WithToken Graph @() -Fresh | Out-Null          # z. B. stille Erneuerung oder anderes Skript
+        Connect-M365WithToken Graph @('User.Read.All') | Out-Null  # engere Anforderung
+        $script:Requested | ForEach-Object { $_ | Should -Match 'UserAuthenticationMethod\.ReadWrite\.All' }
+        (Get-M365GraphTokenInfo).Scopes | Should -Contain 'UserAuthenticationMethod.ReadWrite.All'
+    }
+    It 'engeres Connect-MgGraph aus einem Skript ersetzt keine breitere Verbindung' {
+        $global:M365.State.Graph = 'connected'
+        Set-M365GraphTokenInfo (ConvertFrom-M365Jwt (New-TestToken -Scopes ($BaseScopes + 'UserAuthenticationMethod.ReadWrite.All') -Roles $AuthAdmin))
+        Mock Connect-M365 { }
+        Connect-MgGraph -Scopes 'User.Read.All'
+        Should -Invoke Connect-M365 -Times 0
+        (Get-M365GraphTokenInfo).Scopes | Should -Contain 'UserAuthenticationMethod.ReadWrite.All'
+    }
+    It 'per PIM aktivierte Rolle, die noch nicht im Token steht, verlangt ein frisches Token' {
+        $exchangeAdmin = '29232cdf-9323-42fd-ade2-1d097af3e4de'
+        $tok = ConvertFrom-M365Jwt (New-TestToken -Scopes ($BaseScopes + 'UserAuthenticationMethod.ReadWrite.All') -Roles $exchangeAdmin)
+        $s = Get-M365OperationStatus -Operation 'AuthMethods.Write' -Token $tok -CallerRoleIds $tok.RoleIds -LiveRoleIds @($exchangeAdmin, $AuthAdmin)
+        $s.Status | Should -Be 'FreshTokenRequired'
+        $s.Message | Should -Match 'PIM'
+    }
+    It 'holt bei veralteter Rolle automatisch ein frisches Token und führt dann aus' {
+        $exchangeAdmin = '29232cdf-9323-42fd-ade2-1d097af3e4de'
+        $global:M365.State.Graph = 'connected'
+        $global:M365.StrictPreflight = $true
+        Set-M365GraphTokenInfo (ConvertFrom-M365Jwt (New-TestToken -Scopes ($BaseScopes + 'UserAuthenticationMethod.ReadWrite.All') -Roles $exchangeAdmin))
+        Mock Get-M365LiveRoleIds { @($exchangeAdmin, $AuthAdmin) }
+        Mock Get-M365TargetRoleIds { @() }
+        Mock Connect-M365 { Set-M365GraphTokenInfo (ConvertFrom-M365Jwt (New-TestToken -Scopes ($BaseScopes + 'UserAuthenticationMethod.ReadWrite.All') -Roles $exchangeAdmin, $AuthAdmin)); $global:M365.State.Graph = 'connected' }
+        function global:Test-NativeWrite2 { param([string]$UserId) "ausgeführt für $UserId" }
+        function global:Test-ProxyWrite2 { Invoke-M365PrivilegedCommand -Native 'Test-NativeWrite2' -Operation 'AuthMethods.Write' -Arguments $args }
+        Test-ProxyWrite2 -UserId 'user@contoso.com' | Should -Be 'ausgeführt für user@contoso.com'
+        Should -Invoke Connect-M365 -Times 1 -ParameterFilter { $Fresh -and $Force }
+        $global:M365.StrictPreflight = $false
+    }
+}
+
 Describe 'Durchreichen an Original-Cmdlets' {
     It 'reicht -Schalter:$false, benannte und positionelle Werte korrekt weiter' {
         function global:Test-NativeConnect { param([Parameter(Position = 0)][string]$Organization, [string]$AppId, [switch]$ShowBanner) "org=$Organization app=$AppId banner=$([bool]$ShowBanner)" }

@@ -186,6 +186,12 @@ function Get-M365CallerRoleIds($Info) {
     catch { return $null }
 }
 
+# Aktuell aktive Rollen direkt aus dem Verzeichnis – unabhängig davon, was im (evtl. älteren) Token steht.
+function Get-M365LiveRoleIds {
+    try { return @((Invoke-M365GraphGet 'v1.0/me/transitiveMemberOf/microsoft.graph.directoryRole?$select=roleTemplateId').value.roleTemplateId) }
+    catch { return $null }
+}
+
 # Rollen des Zielkontos (inkl. gruppenbasierter Zuweisungen). $null = unbekannt.
 function Get-M365TargetRoleIds([string]$UserId) {
     if (-not $UserId) { return $null }
@@ -201,6 +207,7 @@ function Get-M365OperationStatus {
         $ConsentedScopes,
         $CallerRoleIds,
         $TargetRoleIds,
+        $LiveRoleIds,      # aktuell aktive Rollen laut Verzeichnis (erkennt PIM-Aktivierungen nach Token-Ausstellung)
         [string]$TargetUser,
         [bool]$EscalationSupported = $true,
         [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow
@@ -247,6 +254,10 @@ function Get-M365OperationStatus {
         $r.CallerRoles = @($CallerRoleIds | ForEach-Object { Get-M365RoleName $_ })
         if ($def.Roles) {
             $roleKeys = @($def.Roles | Where-Object { $CallerRoleIds -contains (Get-M365RoleId $_) })
+            if (-not $roleKeys -and $LiveRoleIds -and @($def.Roles | Where-Object { $LiveRoleIds -contains (Get-M365RoleId $_) })) {
+                $live = @($def.Roles | Where-Object { $LiveRoleIds -contains (Get-M365RoleId $_) })[0]
+                return & $done 'FreshTokenRequired' "Die Rolle $($global:M365Roles[$live].Name) ist aktiv (z. B. per PIM aktiviert), steht aber noch nicht im verwendeten Access Token. Ein neues Token wird benötigt."
+            }
             if (-not $roleKeys) {
                 return & $done 'MissingDirectoryRole' ("Der Scope ist vorhanden, aber dem Benutzer fehlt eine passende aktive Entra-Rolle. Benötigt wird eine von: " + (($def.Roles | ForEach-Object { $global:M365Roles[$_].Name }) -join ', ') + '. (Bei PIM: Rolle aktivieren.)')
             }
@@ -286,8 +297,14 @@ function Test-M365Operation {
         $consented = Get-M365ConsentedGraphScopes
     }
     $callerRoles = if ($info) { Get-M365CallerRoleIds $info } else { $null }
+    # Fehlt die nötige Rolle im Token, live nachsehen – sonst bliebe man nach einer PIM-Aktivierung "read only"
+    $liveRoles = $null
+    $needed = $global:M365Permissions[$Operation].Roles
+    if ($info -and $needed -and $null -ne $callerRoles -and -not @($needed | Where-Object { $callerRoles -contains (Get-M365RoleId $_) })) {
+        $liveRoles = Get-M365LiveRoleIds
+    }
     $targetRoles = if ($TargetUser -and $global:M365Permissions[$Operation].Rule) { Get-M365TargetRoleIds $TargetUser } else { $null }
-    Get-M365OperationStatus -Operation $Operation -Token $info -ConsentedScopes $consented -CallerRoleIds $callerRoles `
+    Get-M365OperationStatus -Operation $Operation -Token $info -ConsentedScopes $consented -CallerRoleIds $callerRoles -LiveRoleIds $liveRoles `
         -TargetRoleIds $targetRoles -TargetUser $TargetUser -EscalationSupported (Test-M365ScopeEscalation $info)
 }
 

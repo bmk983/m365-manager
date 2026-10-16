@@ -273,7 +273,7 @@ function Connect-M365WithToken([string]$Svc, [string[]]$Scopes, [switch]$Fresh, 
             # Einmal angeforderte Zusatz-Scopes bei jeder Erneuerung mitnehmen
             $global:M365.ExtraGraphScopes = @(@($global:M365.ExtraGraphScopes) + @($Scopes) | Where-Object { $_ } | Select-Object -Unique)
             $t = Get-M365Token Graph -ExtraScopes $global:M365.ExtraGraphScopes -Fresh:$Fresh -Reauth:$Reauth
-            Microsoft.Graph.Authentication\Connect-MgGraph -AccessToken (ConvertTo-SecureString $t.Token -AsPlainText -Force) -NoWelcome -ErrorAction Stop
+            Connect-M365GraphNative $t.Token
             # Nur die Claims merken (Scopes, Zeiten, Rollen) – das Token selbst nicht
             Set-M365GraphTokenInfo (ConvertFrom-M365Jwt $t.Token)
             return $t.ExpiresOn
@@ -308,6 +308,10 @@ function Connect-M365WithToken([string]$Svc, [string[]]$Scopes, [switch]$Fresh, 
             return $t.ExpiresOn
         }
     }
+}
+
+function Connect-M365GraphNative([string]$Token) {
+    Microsoft.Graph.Authentication\Connect-MgGraph -AccessToken (ConvertTo-SecureString $Token -AsPlainText -Force) -NoWelcome -ErrorAction Stop
 }
 
 # Normale Anmeldung des jeweiligen Moduls (Fallback). Gibt das Detail für den Status zurück.
@@ -446,7 +450,8 @@ function global:Connect-MgGraph {
             param($n)
             $wanted = @($n.Scopes | ForEach-Object { "$_" -split '[,\s]+' } | Where-Object { $_ })
             if ($global:M365.State.Graph -eq 'connected') {
-                $have = @((Get-MgContext).Scopes)
+                $info = Get-M365GraphTokenInfo   # Scopes des tatsächlich verwendeten Tokens
+                $have = if ($info) { @($info.Scopes) } else { @() }
                 $missing = @($wanted | Where-Object { $have -notcontains $_ })
                 if (-not $missing) { Write-M365 '✓ Graph ist bereits verbunden – Verbindung wird weiterverwendet.' DarkGray; return }
                 Connect-M365 Graph -Scopes $missing -Force
@@ -587,10 +592,17 @@ function Get-M365GraphPermissions {
         'Auth-Typ'    = "$($ctx.AuthType) · Token-Quelle: $($info.Source) · $escalation"
         'Ausgestellt' = if ($info.IssuedAt) { $info.IssuedAt.ToLocalTime().ToString('dd.MM.yyyy HH:mm:ss') } else { 'unbekannt' }
         'Läuft ab'    = if ($info.ExpiresAt) { $info.ExpiresAt.ToLocalTime().ToString('dd.MM.yyyy HH:mm:ss') } else { 'unbekannt' }
-        'Rollen'      = if ($null -eq $roles) { 'unbekannt' } elseif (-not $roles) { 'keine Admin-Rolle aktiv' } else { ($roles | ForEach-Object { Get-M365RoleName $_ }) -join ', ' }
+        'Rollen'      = if ($null -eq $roles) { 'unbekannt' } elseif (-not $roles) { 'keine Admin-Rolle im Token' } else { ($roles | ForEach-Object { Get-M365RoleName $_ }) -join ', ' }
         'Scopes'      = "$(@($info.Scopes).Count) im Token"
     }
     foreach ($k in $rows.Keys) { Write-Host ("  {0,-12} {1}" -f $k, $rows[$k]) }
+    $live = Get-M365LiveRoleIds
+    if ($null -ne $live -and $null -ne $roles) {
+        $newer = @($live | Where-Object { $roles -notcontains $_ -and $global:M365DefaultUserRoleIds -notcontains $_ })
+        if ($newer) {
+            Write-Host ("  {0,-12} {1}" -f 'Achtung', ('Aktiv, aber noch nicht im Token: ' + (($newer | ForEach-Object { Get-M365RoleName $_ }) -join ', ') + ' → Test-M365GraphToken')) -ForegroundColor Yellow
+        }
+    }
     Write-Host ("  {0,-12} {1}" -f '', ((@($info.Scopes) | Sort-Object) -join ' ')) -ForegroundColor DarkGray
     Write-Host ''
 
@@ -636,7 +648,12 @@ function Invoke-M365PrivilegedCommand([string]$Native, [string]$Operation, [obje
     $check = Test-M365Operation -Operation $Operation -TargetUser $target
     if ($check.Status -in 'ConsentRequired', 'MissingGraphScope', 'FreshTokenRequired') {
         Write-M365 $check.Message Yellow
-        if (Request-M365GraphScope -Operation $Operation -Quiet) { $check = Test-M365Operation -Operation $Operation -TargetUser $target }
+        if ($check.AuthorizedByScope) {
+            # Scope ist da, nur das Token ist veraltet (z. B. Rolle per PIM aktiviert): neues Token holen
+            Connect-M365 Graph -Force -Fresh -Quiet
+            $check = Test-M365Operation -Operation $Operation -TargetUser $target
+        }
+        elseif (Request-M365GraphScope -Operation $Operation -Quiet) { $check = Test-M365Operation -Operation $Operation -TargetUser $target }
     }
 
     switch ($check.Status) {

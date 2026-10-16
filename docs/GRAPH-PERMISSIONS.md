@@ -81,6 +81,20 @@ Test-M365Operation AuthMethods.Write -TargetUser user@contoso.com   # Preflight 
 Get-M365LastGraphError                         # letzten Graph-Fehler analysieren
 ```
 
+## „Read only“ trotz Admin-Rolle – Absicherung
+
+**Die App verringert nie Berechtigungen (per Test abgesichert):**
+- Graph wird immer mit allen Profil-Scopes **plus** allen bisher zusätzlich angeforderten Scopes angefordert. Die Zusatz-Scopes werden nur erweitert, nie gekürzt.
+- Der Token-Cache des Brokers ist pro Scope-Kombination getrennt. Ein Token mit weniger Rechten wird nie für eine Anfrage mit mehr Rechten wiederverwendet.
+- Ein `Connect-MgGraph` mit engeren Scopes aus einem Skript ersetzt keine bestehende breitere Verbindung.
+- Der Browser des Profils nutzt nie das Windows-Konto, und Silent-Anfragen gehen immer mit dem Profil-Konto.
+
+**Rollenänderungen (z. B. PIM-Aktivierung) werden erkannt:**
+- **Terminal:** Fehlt eine benötigte Rolle im Token (`wids`), ist sie aber laut Verzeichnis aktiv, holt die App vor der Aktion automatisch ein frisches Token. `Get-M365GraphPermissions` zeigt „Aktiv, aber noch nicht im Token“ an.
+- **Portale (Entra, Admin Center …):** Sie halten ihre Tokens im Seitenspeicher, neue Rollen kommen dort sonst erst nach bis zu einer Stunde an. **Profil-Menü → „Rollen im Browser auffrischen“** leert nur diesen Speicher, nicht die Cookies. Die Anmeldung bleibt, und die Portale holen still neue Tokens mit den aktuellen Rollen.
+
+**Kein App-Problem, aber häufig:** Ist das **Zielkonto selbst Administrator**, darf ein Authentication Administrator dessen Methoden nicht ändern, und das Portal zeigt sie nur lesend an. Dafür ist Privileged Authentication Administrator nötig (`TargetIsPrivileged`).
+
 ## Grenzen
 
 - Die Rollen-Matrix für Zielkonten folgt der Microsoft-Dokumentation („Who can perform sensitive actions“). Bei Abweichungen entscheidet Graph, die App warnt nur. Auf Verwaltungseinheiten begrenzte Rollen werden nicht ausgewertet.

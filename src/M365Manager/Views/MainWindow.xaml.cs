@@ -168,6 +168,48 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    /// <summary>
+    /// Portale (Entra, Admin Center, Azure …) halten ihre Tokens im Seitenspeicher. Nach einer PIM-Aktivierung stehen
+    /// neue Rollen dort erst nach bis zu einer Stunde – bis dahin wirkt das Portal "read only". Hier wird nur dieser
+    /// Speicher geleert (nicht die Cookies): Die Anmeldung bleibt, die Portale holen still neue Tokens mit den aktuellen Rollen.
+    /// </summary>
+    private async void RefreshPortalRoles_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var core = _tabs.Select(t => t.View.CoreWebView2).FirstOrDefault(c => c is not null);
+            if (core is null)
+            {
+                var tab = await CreateTabAsync(Portal.All[0].Url(_profile), Portal.All[0].Key);
+                core = tab.View.CoreWebView2;
+            }
+            if (core is null) return;
+
+            await core.Profile.ClearBrowsingDataAsync(
+                CoreWebView2BrowsingDataKinds.AllDomStorage |
+                CoreWebView2BrowsingDataKinds.ServiceWorkers |
+                CoreWebView2BrowsingDataKinds.DiskCache);
+            _tokens.Clear();   // auch die Tokens fürs Terminal neu ausstellen lassen
+
+            foreach (var t in _tabs) t.View.CoreWebView2?.Reload();
+            _activeTerminal?.View.SendCommand("Test-M365GraphToken", focus: false);
+            Log.Write("Portal-Tokens verworfen (Rollen auffrischen).");
+
+            await new MessageBox
+            {
+                Title = "Rollen aufgefrischt",
+                Content = "Die Portale wurden neu geladen und holen sich jetzt Tokens mit deinen aktuellen Rollen – die Anmeldung bleibt bestehen.\n\n" +
+                          "Zeigt ein Portal danach weiterhin nur Lesezugriff, prüfe: Ist die Rolle in PIM wirklich aktiv? Ist das Zielkonto selbst Administrator? " +
+                          "(Dann wird Privileged Authentication Administrator benötigt.)",
+                CloseButtonText = "OK",
+            }.ShowDialogAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Rollen auffrischen: " + ex);
+        }
+    }
+
     private async void ResetBrowser_Click(object sender, RoutedEventArgs e)
     {
         var result = await new MessageBox
