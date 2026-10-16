@@ -83,7 +83,9 @@ public sealed class TokenBroker
         }
     }
 
-    public async Task<TokenResult> GetAsync(string target, string? extraScopes = null)
+    /// <param name="fresh">Kein zwischengespeichertes Access Token verwenden – neu ausstellen lassen (z. B. nach neuer Zustimmung).</param>
+    /// <param name="reauth">Zusätzlich interaktiv neu anmelden (prompt=login), z. B. nach einer Conditional-Access-Anforderung.</param>
+    public async Task<TokenResult> GetAsync(string target, string? extraScopes = null, bool fresh = false, bool reauth = false)
     {
         var profile = _profile();
         var (clientId, scope, label) = Describe(target, profile, extraScopes);
@@ -93,10 +95,12 @@ public sealed class TokenBroker
         await _gate.WaitAsync();
         try
         {
-            if (_cache.TryGetValue(key, out var cached) && cached.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(10))
+            if (!fresh && !reauth && _cache.TryGetValue(key, out var cached) && cached.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(10))
                 return cached;
+            if (fresh || reauth) _cache.Remove(key);
+            if (reauth) _refreshTokens.Remove(clientId);
 
-            // 1. Still erneuern
+            // 1. Still erneuern (liefert ein neu ausgestelltes Token mit dem aktuellen Zustimmungsstand)
             if (_refreshTokens.TryGetValue(clientId, out var refresh))
             {
                 try
@@ -118,8 +122,8 @@ public sealed class TokenBroker
 
             // 2. Über die Browser-Sitzung – erst unsichtbar, dann mit Fenster
             var pkce = Pkce.Create();
-            var code = await AuthorizeAsync(profile, tenant, clientId, scope, pkce, interactive: false, label)
-                       ?? await AuthorizeAsync(profile, tenant, clientId, scope, pkce, interactive: true, label)
+            var code = (reauth ? null : await AuthorizeAsync(profile, tenant, clientId, scope, pkce, interactive: false, label))
+                       ?? await AuthorizeAsync(profile, tenant, clientId, scope, pkce, interactive: true, label, forceLogin: reauth)
                        ?? throw new TokenException("Anmeldung abgebrochen.");
 
             return Store(key, clientId, await RedeemAsync(tenant, new()
@@ -164,7 +168,7 @@ public sealed class TokenBroker
         return (new TokenResult(at.GetString()!, DateTimeOffset.UtcNow.AddSeconds(expires - 30)), refresh);
     }
 
-    private async Task<string?> AuthorizeAsync(AdminProfile profile, string tenant, string clientId, string scope, Pkce pkce, bool interactive, string label)
+    private async Task<string?> AuthorizeAsync(AdminProfile profile, string tenant, string clientId, string scope, Pkce pkce, bool interactive, string label, bool forceLogin = false)
     {
         var state = Pkce.RandomString(16);
         var url = "https://login.microsoftonline.com/" + Uri.EscapeDataString(tenant) + "/oauth2/v2.0/authorize" +
@@ -176,7 +180,7 @@ public sealed class TokenBroker
                   "&code_challenge=" + pkce.Challenge + "&code_challenge_method=S256" +
                   "&state=" + state +
                   (string.IsNullOrWhiteSpace(profile.Upn) ? "" : "&login_hint=" + Uri.EscapeDataString(profile.Upn)) +
-                  (interactive ? "" : "&prompt=none");
+                  (!interactive ? "&prompt=none" : forceLogin ? "&prompt=login" : "");
 
         var env = await WebViewEnvironments.GetProfileAsync(profile.Id);
         var result = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);

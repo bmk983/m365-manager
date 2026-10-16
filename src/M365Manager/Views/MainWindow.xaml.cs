@@ -626,7 +626,7 @@ public partial class MainWindow : FluentWindow
             if (_activeTerminal?.View == v) RefreshChips();
         };
         view.ProfileValueReported += OnProfileValueReported;
-        view.TokenProvider = (service, extraScopes) => _tokens.GetAsync(service, extraScopes);
+        view.TokenProvider = (service, extraScopes, fresh, reauth) => _tokens.GetAsync(service, extraScopes, fresh, reauth);
         TerminalHost.Children.Add(view);
 
         var tab = new TerminalTab(view);
@@ -684,6 +684,27 @@ public partial class MainWindow : FluentWindow
             disconnect.Click += (_, _) => terminal.SendCommand("Disconnect-M365 " + chip.Key);
             menu.Items.Add(reconnect);
             menu.Items.Add(disconnect);
+            if (chip.Key == "Graph")
+            {
+                // Graph-Berechtigungen: Diagnose und sichere Abläufe (prüfen immer den tatsächlich neu ausgestellten Token)
+                menu.Items.Add(new Separator());
+                foreach (var (header, icon, command) in new[]
+                {
+                    ("Graph-Berechtigungen anzeigen", SymbolRegular.ShieldKeyhole24, "Get-M365GraphPermissions"),
+                    ("Fehlende Berechtigungen anfordern …", SymbolRegular.Key20, "Request-M365GraphScope -Missing"),
+                    ("Token und Berechtigungen erneut prüfen", SymbolRegular.ArrowSync20, "Test-M365GraphToken"),
+                    ("Neu authentifizieren", SymbolRegular.Person20, "Connect-M365 Graph -Force -Reauth"),
+                })
+                {
+                    var item = new MenuItem { Header = header, Icon = new SymbolIcon { Symbol = icon } };
+                    item.Click += (_, _) =>
+                    {
+                        if (!_terminalVisible) SetTerminalVisible(true);
+                        terminal.SendCommand(command);
+                    };
+                    menu.Items.Add(item);
+                }
+            }
             menu.IsOpen = true;
             return;
         }

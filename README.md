@@ -62,6 +62,10 @@ Die Chips über dem Terminal zeigen den Status (grau = getrennt, gelb = verbinde
 
 Eigene Erweiterungen kommen in `M365Manager-Data\custom.ps1`. Die Datei wird bei jedem Terminalstart geladen.
 
+## Graph-Berechtigungen
+
+Fehlende Graph-Berechtigungen werden erkannt und **inkrementell** angefordert, also nur bei Bedarf und mit Prüfung des neu ausgestellten Tokens. Vor privilegierten Aktionen (MFA-Methoden verwalten, Sessions widerrufen) prüft die App Scope, aktive Rolle und Zielkonto. Diagnose im Terminal mit `Get-M365GraphPermissions` oder über das Menü am Graph-Chip. Details stehen in [docs/GRAPH-PERMISSIONS.md](docs/GRAPH-PERMISSIONS.md).
+
 ## Skript-Editor
 
 In der Seitenleiste unter **Skript-Editor** öffnet sich ein Editor wie in VS Code bzw. der ISE (Monaco):

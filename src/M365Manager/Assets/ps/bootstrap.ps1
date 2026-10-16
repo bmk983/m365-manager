@@ -27,6 +27,10 @@ $global:M365 = @{
     AutoConnect = $true
     TokenMode   = $true
     InterceptConnect = $true
+    StrictPreflight  = $false
+    GraphToken  = $null
+    ExtraGraphScopes = @()
+    ScopeDeclined = @{}
     SpUrl       = $null
     Expiry      = @{}
     Verbs       = @(Get-Verb | ForEach-Object Verb)
@@ -44,6 +48,10 @@ $global:M365Patterns = @{
     Purview    = '^\w+-(\w*Compliance\w*|Dlp\w*|Label|LabelPolicy|AutoSensitivityLabel\w*|RetentionEvent\w*|CaseHold\w*|eDiscovery\w*|ProtectionAlert|ActivityAlert|InformationBarrier\w*|Supervisory\w*|DataClassification\w*|SensitiveInformation\w*|FilePlan\w*|AdaptiveScope|InsiderRisk\w*)$'
     Exchange   = '^\w+-(\w*Mailbox\w*|Mail(User|Contact|Flow\w*|Detail\w*|TrafficPolicy\w*)|Recipient\w*|(Dynamic)?DistributionGroup\w*|UnifiedGroup\w*|Transport\w*|(Inbound|Outbound)Connector|AcceptedDomain|RemoteDomain|MessageTrac\w*|Calendar\w*|MobileDevice\w*|Quarantine\w*|Hosted\w*|Malware\w*|SafeLinks\w*|SafeAttachment\w*|AntiPhish\w*|Atp\w*|Dkim\w*|Organization(Config|Relationship)|SharingPolicy|RetentionPolicy\w*|Owa\w*|ManagementRole\w*|RoleGroup\w*|(Global)?AddressList|OfflineAddressBook|EmailAddressPolicy|Journal\w*|MoveRequest\w*|Migration\w*|InboxRule|(Unified|Admin)AuditLog\w*|Place|TenantAllowBlockList\w*|FocusedInbox|Clutter|ResourceConfig|User|Group|Contact|AuthenticationPolicy|ClientAccessRule|App|EOP\w*|PhishSim\w*|SecOps\w*|ReportSubmission\w*|HybridMailflow\w*|IntraOrganization\w*|EmailTenantSettings|ArcConfig)$'
 }
+
+. (Join-Path $PSScriptRoot 'permissions.ps1')
+$global:M365OpCache = @{}
+$global:M365ProxiedCommands = @()
 
 # ------------------------------------------------------------------ Rückkanal zur App
 
@@ -76,12 +84,15 @@ function Get-M365Token {
     #>
     param(
         [Parameter(Mandatory)][ValidateSet('Graph', 'Exchange', 'Purview', 'Teams', 'TeamsGraph', 'SharePoint', 'SharePointSite')][string]$Service,
-        [string[]]$ExtraScopes
+        [string[]]$ExtraScopes,
+        [switch]$Fresh,    # kein zwischengespeichertes Token verwenden – neu ausstellen lassen
+        [switch]$Reauth    # zusätzlich interaktiv neu anmelden (z. B. nach Claims Challenge)
     )
     if (-not $env:M365M_PIPE) { throw 'Kein Kanal zur App vorhanden.' }
     Open-M365Channel
     $id = [guid]::NewGuid().ToString('N')
-    $global:M365PipeWriter.WriteLine("req|$id|token|$Service|$(($ExtraScopes -join ' ') -replace '\|', '')")
+    $flags = @($(if ($Fresh -or $Reauth) { 'fresh' }), $(if ($Reauth) { 'reauth' })) -join ','
+    $global:M365PipeWriter.WriteLine("req|$id|token|$Service|$(($ExtraScopes -join ' ') -replace '\|', '')|$flags")
 
     while ($true) {
         # Lesen in kleinen Schritten, damit Strg+C wirkt. Eine offene Leseoperation wird wiederverwendet.
@@ -132,7 +143,9 @@ function Connect-M365 {
         [switch]$Force,
         [switch]$Auto,
         [switch]$Classic,
-        [switch]$Quiet
+        [switch]$Quiet,
+        [switch]$Fresh,
+        [switch]$Reauth
     )
 
     if ($Service -contains 'All') { $Service = @($global:M365.State.Keys) }
@@ -168,7 +181,7 @@ function Connect-M365 {
             $tokenOk = $false
             if ($useToken) {
                 try {
-                    $expires = Connect-M365WithToken $svc $Scopes
+                    $expires = Connect-M365WithToken $svc $Scopes -Fresh:$Fresh -Reauth:$Reauth
                     $global:M365.Expiry[$svc] = $expires
                     $tokenOk = $true
                     if ($svc -eq 'SharePoint') { $detail = if ($global:M365.SpUrl) { $global:M365.SpUrl } else { "https://$($global:M365.SpTenant)-admin.sharepoint.com" } }
@@ -253,12 +266,16 @@ function Disconnect-M365ExoConnection([switch]$Compliance) {
 }
 
 # Verbindet per Token aus der Browser-Sitzung. Gibt den Ablaufzeitpunkt zurück.
-function Connect-M365WithToken([string]$Svc, [string[]]$Scopes) {
+function Connect-M365WithToken([string]$Svc, [string[]]$Scopes, [switch]$Fresh, [switch]$Reauth) {
     $tenant = $global:M365.Tenant
     switch ($Svc) {
         'Graph' {
-            $t = Get-M365Token Graph -ExtraScopes $Scopes
+            # Einmal angeforderte Zusatz-Scopes bei jeder Erneuerung mitnehmen
+            $global:M365.ExtraGraphScopes = @(@($global:M365.ExtraGraphScopes) + @($Scopes) | Where-Object { $_ } | Select-Object -Unique)
+            $t = Get-M365Token Graph -ExtraScopes $global:M365.ExtraGraphScopes -Fresh:$Fresh -Reauth:$Reauth
             Microsoft.Graph.Authentication\Connect-MgGraph -AccessToken (ConvertTo-SecureString $t.Token -AsPlainText -Force) -NoWelcome -ErrorAction Stop
+            # Nur die Claims merken (Scopes, Zeiten, Rollen) – das Token selbst nicht
+            Set-M365GraphTokenInfo (ConvertFrom-M365Jwt $t.Token)
             return $t.ExpiresOn
         }
         'Exchange' {
@@ -311,6 +328,7 @@ function Connect-M365Classic([string]$Svc, [string[]]$Scopes) {
             }
             $ctx = Get-MgContext
             if (-not $ctx) { throw 'Keine Graph-Verbindung.' }
+            Set-M365GraphTokenInfo $null   # Angaben kommen dann aus Get-MgContext
             return $ctx.Account
         }
         'Exchange' {
@@ -366,17 +384,39 @@ function ConvertFrom-M365Arguments([object[]]$Arguments) {
     [pscustomobject]@{ Named = $named; Positional = $positional }
 }
 
+# Ruft ein Cmdlet mit den zerlegten Argumenten auf: benannte als Hashtable, übrige positionell.
+# Zuverlässiger als @args, das z. B. "-ShowBanner:$false" nicht korrekt weiterreicht.
+function Invoke-M365Native([string]$Native, $Parsed, [hashtable]$Extra = @{}, [object[]]$PipelineInput, [switch]$FromPipeline) {
+    $named = @{} + $Parsed.Named + $Extra
+    $positional = [System.Collections.Generic.List[object]]::new()
+    # Schalter ohne ":" vor einem Positionswert (z. B. -ShowBanner 'contoso'): Wert gehört nicht zum Schalter
+    $params = try { (Get-Command $Native -ErrorAction Stop).Parameters } catch { $null }
+    if ($params) {
+        foreach ($key in @($named.Keys)) {
+            if ($params.ContainsKey($key) -and $params[$key].SwitchParameter -and $named[$key] -isnot [bool] -and $named[$key] -isnot [System.Management.Automation.SwitchParameter]) {
+                $positional.Add($named[$key])
+                $named[$key] = $true
+            }
+        }
+    }
+    foreach ($v in $Parsed.Positional) { $positional.Add($v) }
+    $positional = @($positional)
+    if ($FromPipeline) { $PipelineInput | & $Native @named @positional }
+    else { & $Native @named @positional }
+}
+
 function Test-M365SameValue($Value, [string]$Expected) {
     -not $Value -or ($Expected -and "$Value".Trim().Equals($Expected.Trim(), [StringComparison]::OrdinalIgnoreCase))
 }
 
 function Invoke-M365Intercepted {
-    param([string]$Service, [string]$Native, [object[]]$Arguments, [string[]]$Allowed, [scriptblock]$Condition, [scriptblock]$Action)
+    param([string]$Service, [string]$Native, [object[]]$Arguments, [string[]]$Allowed, [scriptblock]$Condition, [scriptblock]$Action, [scriptblock]$OnPassThrough)
     $p = ConvertFrom-M365Arguments $Arguments
     $foreign = @($p.Named.Keys | Where-Object { $_ -notin $Allowed })
     $take = $global:M365.InterceptConnect -and $env:M365M_PIPE -and $foreign.Count -eq 0 -and $p.Positional.Count -eq 0 -and (& $Condition $p.Named)
     if (-not $take) {
-        & $Native @Arguments
+        Invoke-M365Native $Native $p
+        if ($OnPassThrough) { & $OnPassThrough $p.Named }
         return
     }
     $name = ($Native -split '\\')[-1]
@@ -388,6 +428,20 @@ function global:Connect-MgGraph {
     Invoke-M365Intercepted -Service Graph -Native 'Microsoft.Graph.Authentication\Connect-MgGraph' -Arguments $args `
         -Allowed 'Scopes', 'NoWelcome', 'TenantId', 'ContextScope' `
         -Condition { param($n) Test-M365SameValue $n.TenantId $global:M365.Tenant } `
+        -OnPassThrough {
+            param($n)
+            # Eigene Anmeldung des Skripts: bei übergebenem Token dessen Claims merken, Herkunft "Extern"
+            $info = $null
+            if ($n.AccessToken) {
+                try {
+                    $plain = if ($n.AccessToken -is [securestring]) { [System.Net.NetworkCredential]::new('', $n.AccessToken).Password } else { "$($n.AccessToken)" }
+                    $info = ConvertFrom-M365Jwt $plain
+                    $info.Source = 'Extern'
+                }
+                catch { }
+            }
+            Set-M365GraphTokenInfo $info
+        } `
         -Action {
             param($n)
             $wanted = @($n.Scopes | ForEach-Object { "$_" -split '[,\s]+' } | Where-Object { $_ })
@@ -450,6 +504,191 @@ function Set-M365ConnectOverride([bool]$Enabled = $true) {
     Write-M365 ("Connect-* aus Skripten nutzen die Browser-Anmeldung: " + $(if ($Enabled) { 'an.' } else { 'aus.' })) Cyan
 }
 
+# ------------------------------------------------------------------ Graph-Berechtigungen: anfordern, prüfen, anzeigen
+
+function Request-M365GraphScope {
+    <#
+    .SYNOPSIS
+        Fordert fehlende delegierte Graph-Berechtigungen inkrementell an (Zustimmung im Profil-Browser),
+        holt danach ausdrücklich ein NEUES Token und prüft dessen tatsächliche Scopes.
+    .EXAMPLE
+        Request-M365GraphScope -Operation AuthMethods.Write
+        Request-M365GraphScope -Scopes User.RevokeSessions.All
+        Request-M365GraphScope -Missing      # alles, was den Funktionen der Registry fehlt
+    #>
+    [CmdletBinding()]
+    param([string[]]$Scopes, [string]$Operation, [switch]$Missing, [switch]$Quiet)
+
+    $info = Get-M365GraphTokenInfo
+    $wanted = @($Scopes)
+    if ($Operation) { $wanted += $global:M365Permissions[$Operation].Least }
+    if ($Missing) {
+        foreach ($key in $global:M365Permissions.Keys) {
+            $def = $global:M365Permissions[$key]
+            if (-not $info -or -not @($def.Accept | Where-Object { @($info.Scopes) -contains $_ })) { $wanted += $def.Least }
+        }
+    }
+    $wanted = @($wanted | Where-Object { $_ } | Select-Object -Unique)
+    if (-not $wanted) { Write-M365 '✓ Es fehlen keine Berechtigungen.' Green; return $true }
+
+    if ($info -and -not (Test-M365ScopeEscalation $info)) {
+        Write-M365 "Das aktuelle Graph-Token wurde extern übergeben ($($info.Source)). Dafür kann die App keine zusätzlichen Berechtigungen anfordern. Bitte mit 'Connect-M365 Graph -Force' über die App neu verbinden." Yellow
+        return $false
+    }
+    if ($Missing -and -not $Quiet) {
+        Write-M365 ('Fehlende Berechtigungen: ' + ($wanted -join ', ')) Cyan
+        $answer = Read-Host '  Jetzt anfordern? [J/n]'
+        if ($answer -and $answer -notmatch '^(j|y)') { return $false }
+    }
+
+    Write-M365 ('Fordere an: ' + ($wanted -join ', ') + ' – ggf. erscheint ein Zustimmungs-Fenster.') Cyan
+    Connect-M365 Graph -Scopes $wanted -Force -Fresh -Quiet
+    if ($global:M365.State.Graph -ne 'connected') {
+        Write-M365 'Zustimmung bzw. Anmeldung wurde abgebrochen oder ist fehlgeschlagen – es wurde nichts geändert.' Yellow
+        return $false
+    }
+
+    # Entscheidend ist, was im NEUEN Token steht – nicht, was angefordert wurde
+    $global:M365ConsentCache = $null
+    $now = Get-M365GraphTokenInfo
+    $still = @($wanted | Where-Object { @($now.Scopes) -notcontains $_ })
+    if ($still) {
+        Write-M365 ('Neues Token ausgestellt, es enthält aber weiterhin nicht: ' + ($still -join ', ') + '.') Yellow
+        Write-M365 'Vermutlich ist für diese Berechtigung eine Administrator-Zustimmung nötig, oder die Zustimmung wurde nicht erteilt.' DarkGray
+        return $false
+    }
+    Write-M365 ('✓ Neues Token enthält jetzt: ' + ($wanted -join ', ')) Green
+    return $true
+}
+
+function Test-M365GraphToken {
+    <# .SYNOPSIS Holt ein frisches Graph-Token (still, ohne Anmeldung) und zeigt die tatsächlichen Berechtigungen. #>
+    Connect-M365 Graph -Force -Fresh -Quiet
+    Get-M365GraphPermissions
+}
+
+function Get-M365GraphPermissions {
+    <#
+    .SYNOPSIS
+        Diagnose "Graph-Berechtigungen": Konto, Tenant, Client-ID, Token-Zeiten, tatsächliche Scopes,
+        aktive Rollen und der Status jeder Funktion der Berechtigungs-Registry.
+    #>
+    $info = Get-M365GraphTokenInfo
+    Write-Host ''
+    Write-Host '  Graph-Berechtigungen' -ForegroundColor Cyan
+    if (-not $info) { Write-M365 'Microsoft Graph ist nicht verbunden (Connect-M365 Graph).' Yellow; return }
+    $ctx = Get-MgContext
+    $escalation = if (Test-M365ScopeEscalation $info) { 'Erweiterung durch die App möglich' } else { 'keine automatische Erweiterung möglich' }
+    $roles = Get-M365CallerRoleIds $info
+    $rows = [ordered]@{
+        'Account'     = $info.Account
+        'Tenant-ID'   = $info.TenantId
+        'Client-ID'   = "$($info.ClientId)$(if ($info.ClientId -eq $global:M365GraphClientId) { ' (Microsoft Graph Command Line Tools)' })"
+        'Auth-Typ'    = "$($ctx.AuthType) · Token-Quelle: $($info.Source) · $escalation"
+        'Ausgestellt' = if ($info.IssuedAt) { $info.IssuedAt.ToLocalTime().ToString('dd.MM.yyyy HH:mm:ss') } else { 'unbekannt' }
+        'Läuft ab'    = if ($info.ExpiresAt) { $info.ExpiresAt.ToLocalTime().ToString('dd.MM.yyyy HH:mm:ss') } else { 'unbekannt' }
+        'Rollen'      = if ($null -eq $roles) { 'unbekannt' } elseif (-not $roles) { 'keine Admin-Rolle aktiv' } else { ($roles | ForEach-Object { Get-M365RoleName $_ }) -join ', ' }
+        'Scopes'      = "$(@($info.Scopes).Count) im Token"
+    }
+    foreach ($k in $rows.Keys) { Write-Host ("  {0,-12} {1}" -f $k, $rows[$k]) }
+    Write-Host ("  {0,-12} {1}" -f '', ((@($info.Scopes) | Sort-Object) -join ' ')) -ForegroundColor DarkGray
+    Write-Host ''
+
+    $consented = $null
+    $result = foreach ($key in $global:M365Permissions.Keys) {
+        $def = $global:M365Permissions[$key]
+        if ($null -eq $consented -and -not @($def.Accept | Where-Object { @($info.Scopes) -contains $_ })) { $consented = Get-M365ConsentedGraphScopes }
+        $s = Get-M365OperationStatus -Operation $key -Token $info -ConsentedScopes $consented -CallerRoleIds $roles -EscalationSupported (Test-M365ScopeEscalation $info)
+        [pscustomobject]@{
+            Funktion            = $def.Title
+            Status              = $s.Status
+            'Autorisiert durch' = (@($s.AuthorizedByScope, $s.AuthorizedByRole) | Where-Object { $_ }) -join ' + '
+            Benötigt            = $def.Least -join ', '
+            Fehlt               = $s.MissingScopes -join ', '
+        }
+    }
+    $result | Format-Table -AutoSize -Wrap | Out-Host
+    if ($result | Where-Object Fehlt) { Write-M365 'Fehlende Berechtigungen anfordern: Request-M365GraphScope -Missing' DarkGray }
+}
+
+# Prüft vor Graph-Befehlen der Registry, ob der Scope im Token steht, und fordert ihn sonst einmalig an.
+function Invoke-M365ScopePreflight([string]$CommandName) {
+    if ($global:M365ProxiedCommands -contains $CommandName) { return }
+    if (-not $global:M365OpCache.ContainsKey($CommandName)) { $global:M365OpCache[$CommandName] = "$(Get-M365OperationForCommand $CommandName)" }
+    $op = $global:M365OpCache[$CommandName]
+    if (-not $op -or $global:M365.State.Graph -ne 'connected') { return }
+    $info = Get-M365GraphTokenInfo
+    if (-not $info) { return }
+    $def = $global:M365Permissions[$op]
+    if (@($def.Accept | Where-Object { @($info.Scopes) -contains $_ })) { return }
+    $declined = $global:M365.ScopeDeclined[$op]
+    if ($declined -and $declined -gt (Get-Date).AddMinutes(-10)) { return }
+    Write-M365 "$CommandName benötigt $($def.Least -join ', ') – diese Berechtigung fehlt im aktuellen Token." Yellow
+    if (-not (Request-M365GraphScope -Operation $op -Quiet)) { $global:M365.ScopeDeclined[$op] = Get-Date }
+}
+
+# Ausführung privilegierter Graph-Cmdlets (MFA-Methoden verwalten, Sessions widerrufen) mit Preflight und Fehlerdiagnose.
+function Invoke-M365PrivilegedCommand([string]$Native, [string]$Operation, [object[]]$Arguments, [object[]]$PipelineInput, [switch]$FromPipeline) {
+    $p = ConvertFrom-M365Arguments $Arguments
+    $target = if ($p.Named.UserId) { "$($p.Named.UserId)" } elseif ($p.Positional.Count) { "$($p.Positional[0])" } else { $null }
+
+    if ($global:M365.State.Graph -ne 'connected' -and $global:M365.AutoConnect) { Connect-M365 Graph -Auto }
+    $check = Test-M365Operation -Operation $Operation -TargetUser $target
+    if ($check.Status -in 'ConsentRequired', 'MissingGraphScope', 'FreshTokenRequired') {
+        Write-M365 $check.Message Yellow
+        if (Request-M365GraphScope -Operation $Operation -Quiet) { $check = Test-M365Operation -Operation $Operation -TargetUser $target }
+    }
+
+    switch ($check.Status) {
+        'Allowed' { }
+        { $_ -in 'UnsupportedAuthenticationFlow', 'ConsentRequired', 'MissingGraphScope', 'FreshTokenRequired' } {
+            Write-Error -Message $check.Message -ErrorId "M365.$($check.Status)" -Category PermissionDenied -TargetObject $target
+            return
+        }
+        default {
+            # MissingDirectoryRole / TargetIsPrivileged: verständlich warnen – Graph entscheidet endgültig
+            Write-M365 "⚠ $($check.Message)" Yellow
+            if ($global:M365.StrictPreflight) {
+                Write-Error -Message $check.Message -ErrorId "M365.$($check.Status)" -Category PermissionDenied -TargetObject $target
+                return
+            }
+            Write-M365 'Die Aktion wird trotzdem an Microsoft Graph gesendet – Graph trifft die endgültige Entscheidung. (Strenger Modus: $M365.StrictPreflight = $true)' DarkGray
+        }
+    }
+
+    $stop = $p.Named.ContainsKey('ErrorAction') -and "$($p.Named.ErrorAction)" -eq 'Stop'
+    try {
+        # Pipeline-Eingaben (z. B. … | Revoke-MgUserSignInSession) unverändert weiterreichen
+        $extra = if ($p.Named.ContainsKey('ErrorAction')) { @{} } else { @{ ErrorAction = 'Stop' } }
+        Invoke-M365Native $Native $p -Extra $extra -PipelineInput $PipelineInput -FromPipeline:$FromPipeline
+    }
+    catch {
+        Write-M365GraphDiagnostics (Resolve-M365GraphError -ErrorRecord $_ -Operation $Operation -TargetUser $target)
+        if ($stop) { throw }
+        Write-Error -ErrorRecord $_
+    }
+}
+
+# Erzeugt für die privilegierten Cmdlets (aus der Registry) gleichnamige Funktionen, die den Preflight ausführen.
+function Register-M365PrivilegedProxies {
+    $sources = @(
+        @{ Module = 'Microsoft.Graph.Identity.SignIns'; Operation = 'AuthMethods.Write' },
+        @{ Module = 'Microsoft.Graph.Users.Actions'; Operation = 'Sessions.Revoke' }
+    )
+    foreach ($s in $sources) {
+        $dir = Join-Path "$env:M365M_MODULES" $s.Module
+        $psd1 = Get-ChildItem $dir -Recurse -Filter "$($s.Module).psd1" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+        if (-not $psd1) { continue }
+        try { $data = Import-PowerShellDataFile $psd1.FullName } catch { continue }
+        $pattern = $global:M365Permissions[$s.Operation].Pattern
+        foreach ($name in @($data.FunctionsToExport) + @($data.CmdletsToExport) | Where-Object { $_ -and $_ -match $pattern } | Select-Object -Unique) {
+            $body = [scriptblock]::Create("Invoke-M365PrivilegedCommand -Native '$($s.Module)\$name' -Operation '$($s.Operation)' -Arguments `$args -PipelineInput @(`$input) -FromPipeline:`$MyInvocation.ExpectingInput")
+            Set-Item -Path "function:global:$name" -Value $body
+            $global:M365ProxiedCommands += $name
+        }
+    }
+}
+
 function Disconnect-M365 {
     [CmdletBinding()]
     param(
@@ -463,7 +702,7 @@ function Disconnect-M365 {
         foreach ($svc in $Service) {
             try {
                 switch ($svc) {
-                    'Graph'      { if (Get-Module Microsoft.Graph.Authentication) { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null } }
+                    'Graph'      { if (Get-Module Microsoft.Graph.Authentication) { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null }; Set-M365GraphTokenInfo $null; $global:M365ConsentCache = $null }
                     'Exchange'   { if (Get-Module ExchangeOnlineManagement) { Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue } }
                     'Purview'    { if (Get-Module ExchangeOnlineManagement) { Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue } }
                     'Teams'      { if (Get-Module MicrosoftTeams) { Disconnect-MicrosoftTeams -ErrorAction SilentlyContinue | Out-Null } }
@@ -606,6 +845,14 @@ function Get-M365Help {
     Write-Host "  Get-M365Status                                               Verbindungsstatus"
     Write-Host "  Set-M365AutoConnect `$false                                  Auto-Verbinden aus"
     Write-Host "  Set-M365ConnectOverride `$false                              Connect-* aus Skripten nicht abfangen"
+    Write-Host ''
+    Write-Host "  ${c}Graph-Berechtigungen${r}"
+    Write-Host "  Get-M365GraphPermissions                                     Token, Scopes, Rollen, Status je Funktion"
+    Write-Host "  Request-M365GraphScope -Missing                              fehlende Berechtigungen anfordern"
+    Write-Host "  Test-M365GraphToken                                          frisches Token holen und erneut prüfen"
+    Write-Host "  Connect-M365 Graph -Reauth                                   neu authentifizieren (z. B. nach Conditional Access)"
+    Write-Host "  Test-M365Operation AuthMethods.Write -TargetUser <UPN>      Preflight für ein Zielkonto"
+    Write-Host "  Get-M365LastGraphError                                       letzten Graph-Fehler analysieren"
     Write-Host "  Register-M365PnPApp                                         PnP-App im Tenant anlegen"
     Write-Host "  Install-M365Module <Name>                                   weiteres Modul portabel laden"
     Write-Host ''
@@ -641,25 +888,30 @@ function Update-M365Connection([string]$Name) {
 }
 
 $ExecutionContext.InvokeCommand.PreCommandLookupAction = {
-    param([string]$CommandName, [System.Management.Automation.CommandLookupEventArgs]$EventArgs)
+    param([string]$CommandName, [System.Management.Automation.CommandLookupEventArgs]$LookupArgs)
     if ($global:M365.Busy -or -not $global:M365.AutoConnect) { return }
-    if ($EventArgs.CommandOrigin -ne 'Runspace') { return }
-    if ($CommandName -notmatch '^\w+-\w+$') { return }
-    Update-M365Connection $CommandName | Out-Null
-    $svc = Resolve-M365Service $CommandName
-    if (-not $svc -or $global:M365.State[$svc] -eq 'connected' -or $global:M365.Tried[$svc]) { return }
-    Connect-M365 -Service $svc -Auto
+    if ($CommandName -notmatch '^[A-Za-z]+-[A-Za-z0-9]+$') { return }   # interne Modul-Befehle (mit "_") ignorieren
+    if ($LookupArgs.CommandOrigin -eq 'Runspace') {
+        Update-M365Connection $CommandName | Out-Null
+        $svc = Resolve-M365Service $CommandName
+        if ($svc -and $global:M365.State[$svc] -ne 'connected' -and -not $global:M365.Tried[$svc]) { Connect-M365 -Service $svc -Auto }
+    }
+    # Fehlende Graph-Berechtigung für Funktionen der Registry rechtzeitig anfordern – auch in Skripten
+    if ($CommandName -match '-Mg') {
+        $global:M365.Busy = $true
+        try { Invoke-M365ScopePreflight $CommandName } finally { $global:M365.Busy = $false }
+    }
 }
 $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
-    param([string]$CommandName, [System.Management.Automation.CommandLookupEventArgs]$EventArgs)
+    param([string]$CommandName, [System.Management.Automation.CommandLookupEventArgs]$LookupArgs)
     if ($global:M365.Busy -or -not $global:M365.AutoConnect) { return }
     $svc = Resolve-M365Service $CommandName -NotFound
     if (-not $svc -or $global:M365.State[$svc] -eq 'connected' -or $global:M365.Tried[$svc]) { return }
     Connect-M365 -Service $svc -Auto
     $cmd = Get-Command $CommandName -ErrorAction SilentlyContinue
     if ($cmd) {
-        $EventArgs.Command = $cmd
-        $EventArgs.StopSearch = $true
+        $LookupArgs.Command = $cmd
+        $LookupArgs.StopSearch = $true
     }
 }
 
@@ -721,6 +973,9 @@ Write-Host "  `e[90mConnect-M365 · Disconnect-M365 · Get-M365Status · `e[0mGe
 $missing = @('Microsoft.Graph.Authentication', 'ExchangeOnlineManagement', 'MicrosoftTeams', 'PnP.PowerShell') |
     Where-Object { -not (Get-Module -ListAvailable $_) }
 if ($missing) { Write-Host "  `e[33m⚠ Module fehlen noch: $($missing -join ', ') – Einrichtung im Startfenster prüfen.`e[0m" }
+
+# Preflight für MFA-Methoden verwalten und Sessions widerrufen aktivieren
+try { Register-M365PrivilegedProxies } catch { }
 
 # Kanal zur App sofort belegen – die App akzeptiert nur diesen PowerShell-Prozess.
 if ($env:M365M_PIPE) { try { Open-M365Channel } catch { } }

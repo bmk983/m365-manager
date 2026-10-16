@@ -37,7 +37,7 @@ public sealed class TerminalView : Grid, IDisposable
     public event Action<string, string>? ProfileValueReported;
 
     /// <summary>Liefert Tokens aus der Browser-Sitzung des Profils (Dienst, zusätzliche Scopes).</summary>
-    public Func<string, string?, Task<TokenResult>>? TokenProvider { get; set; }
+    public Func<string, string?, bool, bool, Task<TokenResult>>? TokenProvider { get; set; }
 
     public TerminalView(Func<AdminProfile> profile, int number, bool dark)
     {
@@ -280,16 +280,20 @@ public sealed class TerminalView : Grid, IDisposable
     {
         if (kind != "token" || args.Length == 0) throw new InvalidOperationException("Unbekannte Anfrage.");
         var provider = TokenProvider ?? throw new InvalidOperationException("Keine Token-Quelle.");
-        var extra = args.Length > 1 ? args[1] : null;
+        var extra = args.Length > 1 && args[1].Length > 0 ? args[1] : null;
+        var flags = args.Length > 2 ? args[2].Split(',') : [];
+        var fresh = flags.Contains("fresh");
+        var reauth = flags.Contains("reauth");
         // WebView2 und Fenster gehören auf den UI-Thread.
-        var token = await Dispatcher.InvokeAsync(() => provider(args[0], extra)).Task.Unwrap();
+        var token = await Dispatcher.InvokeAsync(() => provider(args[0], extra, fresh, reauth)).Task.Unwrap();
         return token.AccessToken + "|" + token.ExpiresOn.ToUnixTimeSeconds();
     }
 
     private void OnHostMessage(string line)
     {
         var parts = line.Split('|', 4);
-        if (parts.Length < 3) return;
+        if (parts.Length < 2) return;
+        if (parts.Length < 3 && parts[0] != "log") return;
         switch (parts[0])
         {
             case "svc":
@@ -298,6 +302,10 @@ public sealed class TerminalView : Grid, IDisposable
                 break;
             case "set":
                 ProfileValueReported?.Invoke(parts[1], parts[2]);
+                break;
+            case "log":
+                // Diagnosezeilen aus der Sitzung (z. B. Graph-Fehler mit request-id) – enthalten keine Tokens
+                Log.Write("Terminal: " + line["log|".Length..]);
                 break;
         }
     }

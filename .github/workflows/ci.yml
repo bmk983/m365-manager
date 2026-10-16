@@ -1,0 +1,21 @@
+# Bei jedem Push und Pull Request: Tests und Build prüfen (ohne Release).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Tests
+        shell: pwsh
+        run: ./tests/run-tests.ps1
+      - name: Build
+        run: dotnet build src/M365Manager/M365Manager.csproj -c Release
