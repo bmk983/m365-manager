@@ -20,7 +20,7 @@ public sealed class PipeListener : IDisposable
     private readonly Func<int?> _expectedClient;
 
     /// <param name="expectedClient">Prozess-ID, die sich verbinden darf (die PowerShell dieses Terminals). Andere werden abgewiesen.</param>
-    public PipeListener(Action<string> onLine, Func<string, string[], Task<string>> onRequest, Func<int?> expectedClient)
+    public PipeListener(Action<string> onLine, Func<string, string[], Action<string>, Task<string>> onRequest, Func<int?> expectedClient)
     {
         _expectedClient = expectedClient;
         _ = Task.Run(() => LoopAsync(onLine, onRequest, _cts.Token));
@@ -38,7 +38,7 @@ public sealed class PipeListener : IDisposable
         return false;
     }
 
-    private async Task LoopAsync(Action<string> onLine, Func<string, string[], Task<string>> onRequest, CancellationToken ct)
+    private async Task LoopAsync(Action<string> onLine, Func<string, string[], Action<string>, Task<string>> onRequest, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
@@ -70,15 +70,25 @@ public sealed class PipeListener : IDisposable
                     var id = parts[1];
                     _ = Task.Run(async () =>
                     {
-                        string answer;
-                        try { answer = "ok|" + await onRequest(parts[2], parts[3..]); }
-                        catch (Exception ex) { answer = "err|" + ex.Message.Replace('|', '/').Replace('\n', ' ').Replace('\r', ' '); }
+                        async Task SendAsync(string payload)
+                        {
+                            try { await writeLock.WaitAsync(ct); }
+                            catch (OperationCanceledException) { return; }
+                            try { await writer.WriteLineAsync("res|" + id + "|" + payload); }
+                            catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException) { }
+                            finally { writeLock.Release(); }
+                        }
 
-                        try { await writeLock.WaitAsync(ct); }
-                        catch (OperationCanceledException) { return; }
-                        try { await writer.WriteLineAsync("res|" + id + "|" + answer); }
-                        catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException) { }
-                        finally { writeLock.Release(); }
+                        // Zwischenmeldungen (z. B. "Anmeldefenster geöffnet") und ein Herzschlag alle 10 s:
+                        // So weiß die PowerShell, dass die App noch arbeitet, und wartet nie blind.
+                        void Notify(string text) => _ = SendAsync("pending|" + text.Replace('|', '/').Replace('\n', ' ').Replace('\r', ' '));
+                        using var heartbeat = new Timer(_ => Notify(""), null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+
+                        string answer;
+                        try { answer = "ok|" + await onRequest(parts[2], parts[3..], Notify); }
+                        catch (Exception ex) { answer = "err|" + ex.Message.Replace('|', '/').Replace('\n', ' ').Replace('\r', ' '); }
+                        await heartbeat.DisposeAsync();
+                        await SendAsync(answer);
                     }, ct);
                 }
             }

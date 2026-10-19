@@ -286,6 +286,54 @@ Describe 'Keine Rückstufung auf Lesezugriff' {
     }
 }
 
+Describe 'Token-Anfrage an die App hängt nie' {
+    BeforeAll {
+        # Nachgebaute App-Seite: Pipe-Server in einem eigenen Thread, Verhalten pro Verbindung steuerbar
+        function Start-FakeApp([string]$Name, [string[]]$Behaviour) {
+            Start-ThreadJob -ArgumentList $Name, $Behaviour -ScriptBlock {
+                param($name, $behaviour)
+                foreach ($mode in $behaviour) {
+                    $server = [System.IO.Pipes.NamedPipeServerStream]::new($name, 'InOut', 1, 'Byte', 'Asynchronous')
+                    $server.WaitForConnection()
+                    $r = [System.IO.StreamReader]::new($server); $w = [System.IO.StreamWriter]::new($server); $w.AutoFlush = $true
+                    $line = $r.ReadLine()
+                    $id = $line.Split('|')[1]
+                    switch ($mode) {
+                        'silent' { $null = $r.ReadLine() }   # antwortet nie – gibt die Leitung erst frei, wenn der Client trennt (wie die echte App)
+                        'heartbeat' { 1..2 | ForEach-Object { $w.WriteLine("res|$id|pending|"); Start-Sleep -Milliseconds 300 }; $w.WriteLine("res|$id|ok|TOKEN-OK|4102444800") }
+                        'window' { $w.WriteLine("res|$id|pending|Anmeldefenster für Microsoft Graph ist geöffnet – bitte dort anmelden."); Start-Sleep -Milliseconds 300; $w.WriteLine("res|$id|ok|TOKEN-WIN|4102444800") }
+                        'ok' { $w.WriteLine("res|$id|ok|TOKEN-RETRY|4102444800") }
+                    }
+                    Start-Sleep -Milliseconds 200
+                    $server.Dispose()
+                }
+            }
+        }
+    }
+    BeforeEach {
+        Reset-M365Channel
+        $env:M365M_PIPE = 'm365m-test-' + [guid]::NewGuid().ToString('N')
+    }
+    AfterEach { Get-Job | Remove-Job -Force -ErrorAction SilentlyContinue; Reset-M365Channel; $env:M365M_PIPE = 'm365m-test-pipe' }
+
+    It 'Herzschlag der App, dann Token' {
+        $null = Start-FakeApp $env:M365M_PIPE @('heartbeat')
+        (Get-M365Token Graph).Token | Should -Be 'TOKEN-OK'
+    }
+    It 'zeigt an, dass ein Anmeldefenster offen ist' {
+        $null = Start-FakeApp $env:M365M_PIPE @('window')
+        $out = Get-M365Token Graph 6>&1
+        ($out | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } | ForEach-Object { "$_" }) -join ' ' | Should -Match 'Anmeldefenster'
+        ($out | Where-Object { $_.Token }).Token | Should -Be 'TOKEN-WIN'
+    }
+    It 'stumme App: neu verbinden, erneut fragen, Token erhalten (statt endlos zu hängen)' {
+        $null = Start-FakeApp $env:M365M_PIPE @('silent', 'ok')
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        (Get-M365Token Graph).Token | Should -Be 'TOKEN-RETRY'
+        $sw.Elapsed.TotalSeconds | Should -BeLessThan 60
+    }
+}
+
 Describe 'Durchreichen an Original-Cmdlets' {
     It 'reicht -Schalter:$false, benannte und positionelle Werte korrekt weiter' {
         function global:Test-NativeConnect { param([Parameter(Position = 0)][string]$Organization, [string]$AppId, [switch]$ShowBanner) "org=$Organization app=$AppId banner=$([bool]$ShowBanner)" }

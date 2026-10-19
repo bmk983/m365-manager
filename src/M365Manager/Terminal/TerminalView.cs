@@ -37,7 +37,7 @@ public sealed class TerminalView : Grid, IDisposable
     public event Action<string, string>? ProfileValueReported;
 
     /// <summary>Liefert Tokens aus der Browser-Sitzung des Profils (Dienst, zusätzliche Scopes).</summary>
-    public Func<string, string?, bool, bool, Task<TokenResult>>? TokenProvider { get; set; }
+    public Func<string, string?, bool, bool, Action<string>, Task<TokenResult>>? TokenProvider { get; set; }
 
     public TerminalView(Func<AdminProfile> profile, int number, bool dark)
     {
@@ -276,7 +276,7 @@ public sealed class TerminalView : Grid, IDisposable
     }
 
     /// <summary>Anfrage aus PowerShell, z. B. "token" + Dienst. Antwort: Token|Ablauf (Unix-Sekunden).</summary>
-    private async Task<string> HandleRequestAsync(string kind, string[] args)
+    private async Task<string> HandleRequestAsync(string kind, string[] args, Action<string> notify)
     {
         if (kind != "token" || args.Length == 0) throw new InvalidOperationException("Unbekannte Anfrage.");
         var provider = TokenProvider ?? throw new InvalidOperationException("Keine Token-Quelle.");
@@ -285,7 +285,7 @@ public sealed class TerminalView : Grid, IDisposable
         var fresh = flags.Contains("fresh");
         var reauth = flags.Contains("reauth");
         // WebView2 und Fenster gehören auf den UI-Thread.
-        var token = await Dispatcher.InvokeAsync(() => provider(args[0], extra, fresh, reauth)).Task.Unwrap();
+        var token = await Dispatcher.InvokeAsync(() => provider(args[0], extra, fresh, reauth, notify)).Task.Unwrap();
         return token.AccessToken + "|" + token.ExpiresOn.ToUnixTimeSeconds();
     }
 

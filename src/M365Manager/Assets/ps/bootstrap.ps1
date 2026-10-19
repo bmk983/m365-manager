@@ -57,8 +57,10 @@ $global:M365ProxiedCommands = @()
 
 function Open-M365Channel {
     if ($global:M365Pipe -and $global:M365Pipe.IsConnected) { return }
-    $global:M365Pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', $env:M365M_PIPE, [System.IO.Pipes.PipeDirection]::InOut)
-    $global:M365Pipe.Connect(3000)
+    # Asynchron öffnen: Nur so lässt sich die Leitung auch während eines laufenden Lesevorgangs schließen.
+    # (Bei synchronen Handles blockiert Windows das Schließen, bis der Lesevorgang endet – im Fehlerfall nie.)
+    $global:M365Pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', $env:M365M_PIPE, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous)
+    $global:M365Pipe.Connect(8000)
     $utf8 = [System.Text.UTF8Encoding]::new($false)
     $global:M365PipeWriter = [System.IO.StreamWriter]::new($global:M365Pipe, $utf8)
     $global:M365PipeWriter.AutoFlush = $true
@@ -89,27 +91,66 @@ function Get-M365Token {
         [switch]$Reauth    # zusätzlich interaktiv neu anmelden (z. B. nach Claims Challenge)
     )
     if (-not $env:M365M_PIPE) { throw 'Kein Kanal zur App vorhanden.' }
-    Open-M365Channel
-    $id = [guid]::NewGuid().ToString('N')
-    $flags = @($(if ($Fresh -or $Reauth) { 'fresh' }), $(if ($Reauth) { 'reauth' })) -join ','
-    $global:M365PipeWriter.WriteLine("req|$id|token|$Service|$(($ExtraScopes -join ' ') -replace '\|', '')|$flags")
+    $flags = @($(if ($Fresh -or $Reauth) { 'fresh' }), $(if ($Reauth) { 'reauth' }) | Where-Object { $_ }) -join ','
+    $request = "token|$Service|$(($ExtraScopes -join ' ') -replace '\|', '')|$flags"
 
-    while ($true) {
-        # Lesen in kleinen Schritten, damit Strg+C wirkt. Eine offene Leseoperation wird wiederverwendet.
-        if (-not $global:M365PendingRead) { $global:M365PendingRead = $global:M365PipeReader.ReadLineAsync() }
-        while (-not $global:M365PendingRead.Wait(200)) { }
-        $line = $global:M365PendingRead.Result
-        $global:M365PendingRead = $null
-        if ($null -eq $line) { $global:M365Pipe = $null; throw 'Kanal zur App wurde getrennt.' }
-
-        $parts = $line.Split('|', 5)
-        if ($parts[0] -ne 'res' -or $parts[1] -ne $id) { continue }
-        if ($parts[2] -ne 'ok') { throw $parts[3] }
-        return [pscustomobject]@{
-            Token     = $parts[3]
-            ExpiresOn = [DateTimeOffset]::FromUnixTimeSeconds([long]$parts[4])
+    # Nie blind warten: Die App meldet sich während der Bearbeitung alle 10 s ("pending").
+    # Bleibt sie 45 s stumm, ist der Kanal gestört -> neu verbinden und die Anfrage einmal wiederholen.
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        try { Open-M365Channel }
+        catch {
+            Reset-M365Channel
+            if ($attempt -eq 2) { throw 'Keine Verbindung zur App möglich. Bitte das Terminal neu starten (↻).' }
+            continue
         }
+        $id = [guid]::NewGuid().ToString('N')
+        try { $global:M365PipeWriter.WriteLine("req|$id|$request") }
+        catch { Reset-M365Channel; if ($attempt -eq 2) { throw "Kanal zur App gestört: $($_.Exception.Message)" }; continue }
+
+        $deadline = (Get-Date).AddSeconds(45)
+        $waitingNoted = $false
+        while ($true) {
+            # Lesen in kleinen Schritten, damit Strg+C wirkt. Eine offene Leseoperation wird wiederverwendet.
+            if (-not $global:M365PendingRead) { $global:M365PendingRead = $global:M365PipeReader.ReadLineAsync() }
+            while (-not $global:M365PendingRead.Wait(200)) {
+                if ((Get-Date) -gt $deadline) { break }
+            }
+            if (-not $global:M365PendingRead.IsCompleted) { break }   # Zeitüberschreitung
+
+            $line = if ($global:M365PendingRead.IsFaulted) { $null } else { $global:M365PendingRead.Result }
+            $global:M365PendingRead = $null
+            if ($null -eq $line) { break }                              # Kanal getrennt
+
+            $parts = $line.Split('|', 5)
+            if ($parts[0] -ne 'res' -or $parts[1] -ne $id) { continue }
+            switch ($parts[2]) {
+                'pending' {
+                    if ($parts[3]) { Write-M365 $parts[3] DarkGray; $deadline = (Get-Date).AddMinutes(15); $waitingNoted = $true }   # Anmeldefenster: Zeit lassen
+                    elseif ($deadline -lt (Get-Date).AddSeconds(45)) { $deadline = (Get-Date).AddSeconds(45) }
+                    if (-not $waitingNoted -and -not $parts[3]) { Write-M365 'Warte auf die App …' DarkGray; $waitingNoted = $true }
+                    continue
+                }
+                'ok' {
+                    return [pscustomobject]@{
+                        Token     = $parts[3]
+                        ExpiresOn = [DateTimeOffset]::FromUnixTimeSeconds([long]$parts[4])
+                    }
+                }
+                default { throw $parts[3] }
+            }
+        }
+
+        Reset-M365Channel
+        if ($attempt -eq 1) { Write-M365 'Keine Antwort von der App – baue die Verbindung neu auf und versuche es erneut …' DarkYellow }
     }
+    Send-M365Host "log|Token-Anfrage ${Service}: keine Antwort der App nach zwei Versuchen"
+    throw 'Die App antwortet nicht auf die Anmeldeanfrage. Bitte das Terminal neu starten (↻).'
+}
+
+function Reset-M365Channel {
+    try { if ($global:M365Pipe) { $global:M365Pipe.Dispose() } } catch { }
+    $global:M365Pipe = $null
+    $global:M365PendingRead = $null
 }
 function Set-M365State([string]$Service, [string]$State, [string]$Detail = '') {
     $global:M365.State[$Service] = $State

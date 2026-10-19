@@ -668,7 +668,7 @@ public partial class MainWindow : FluentWindow
             if (_activeTerminal?.View == v) RefreshChips();
         };
         view.ProfileValueReported += OnProfileValueReported;
-        view.TokenProvider = (service, extraScopes, fresh, reauth) => _tokens.GetAsync(service, extraScopes, fresh, reauth);
+        view.TokenProvider = (service, extraScopes, fresh, reauth, notify) => _tokens.GetAsync(service, extraScopes, fresh, reauth, notify);
         TerminalHost.Children.Add(view);
 
         var tab = new TerminalTab(view);

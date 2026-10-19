@@ -85,18 +85,26 @@ public sealed class TokenBroker
 
     /// <param name="fresh">Kein zwischengespeichertes Access Token verwenden – neu ausstellen lassen (z. B. nach neuer Zustimmung).</param>
     /// <param name="reauth">Zusätzlich interaktiv neu anmelden (prompt=login), z. B. nach einer Conditional-Access-Anforderung.</param>
-    public async Task<TokenResult> GetAsync(string target, string? extraScopes = null, bool fresh = false, bool reauth = false)
+    public async Task<TokenResult> GetAsync(string target, string? extraScopes = null, bool fresh = false, bool reauth = false, Action<string>? progress = null)
     {
         var profile = _profile();
         var (clientId, scope, label) = Describe(target, profile, extraScopes);
         var tenant = string.IsNullOrWhiteSpace(profile.Tenant) ? "organizations" : profile.Tenant;
         var key = clientId + "|" + scope;
 
-        await _gate.WaitAsync();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        if (!await _gate.WaitAsync(TimeSpan.FromSeconds(1)))
+        {
+            progress?.Invoke("Warte auf eine andere laufende Anmeldung …");
+            await _gate.WaitAsync();
+        }
         try
         {
             if (!fresh && !reauth && _cache.TryGetValue(key, out var cached) && cached.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(10))
+            {
+                Log.Write($"Token {target}: aus Cache ({watch.ElapsedMilliseconds} ms)");
                 return cached;
+            }
             if (fresh || reauth) _cache.Remove(key);
             if (reauth) _refreshTokens.Remove(clientId);
 
@@ -105,13 +113,15 @@ public sealed class TokenBroker
             {
                 try
                 {
-                    return Store(key, clientId, await RedeemAsync(tenant, new()
+                    var refreshed = Store(key, clientId, await RedeemAsync(tenant, new()
                     {
                         ["client_id"] = clientId,
                         ["grant_type"] = "refresh_token",
                         ["refresh_token"] = refresh,
                         ["scope"] = scope + " offline_access",
                     }));
+                    Log.Write($"Token {target}: per Refresh erneuert ({watch.ElapsedMilliseconds} ms)");
+                    return refreshed;
                 }
                 catch (TokenException ex)
                 {
@@ -122,9 +132,15 @@ public sealed class TokenBroker
 
             // 2. Über die Browser-Sitzung – erst unsichtbar, dann mit Fenster
             var pkce = Pkce.Create();
-            var code = (reauth ? null : await AuthorizeAsync(profile, tenant, clientId, scope, pkce, interactive: false, label))
-                       ?? await AuthorizeAsync(profile, tenant, clientId, scope, pkce, interactive: true, label, forceLogin: reauth)
+            var code = reauth ? null : await AuthorizeAsync(profile, tenant, clientId, scope, pkce, interactive: false, label);
+            Log.Write($"Token {target}: unsichtbarer Versuch {(code is null ? "ohne Ergebnis" : "erfolgreich")} ({watch.ElapsedMilliseconds} ms)");
+            if (code is null)
+            {
+                progress?.Invoke("Anmeldefenster für " + label + " ist geöffnet – bitte dort anmelden.");
+                code = await AuthorizeAsync(profile, tenant, clientId, scope, pkce, interactive: true, label, forceLogin: reauth)
                        ?? throw new TokenException("Anmeldung abgebrochen.");
+                Log.Write($"Token {target}: Anmeldefenster abgeschlossen ({watch.ElapsedMilliseconds} ms)");
+            }
 
             return Store(key, clientId, await RedeemAsync(tenant, new()
             {
@@ -205,7 +221,14 @@ public sealed class TokenBroker
         if (!interactive)
         {
             var hwnd = new WindowInteropHelper(_owner).Handle;
-            var controller = await env.CreateCoreWebView2ControllerAsync(hwnd);
+            var creating = env.CreateCoreWebView2ControllerAsync(hwnd);
+            if (await Task.WhenAny(creating, Task.Delay(TimeSpan.FromSeconds(15))) != creating)
+            {
+                Log.Write("Token " + label + ": unsichtbare Browser-Instanz reagiert nicht (15 s) – weiter mit Anmeldefenster.");
+                _ = creating.ContinueWith(t => { if (t.Status == TaskStatus.RanToCompletion) t.Result.Close(); }, TaskScheduler.FromCurrentSynchronizationContext());
+                return null;
+            }
+            var controller = await creating;
             try
             {
                 controller.IsVisible = false;
