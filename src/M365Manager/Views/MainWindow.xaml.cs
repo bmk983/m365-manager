@@ -58,6 +58,8 @@ public partial class MainWindow : FluentWindow
         BrowserTabs.ItemsSource = _tabs;
         TerminalTabs.ItemsSource = _terminalTabs;
         ServiceChips.ItemsSource = _chips;
+        TabDragReorder.Attach(BrowserTabs, (from, to) => _tabs.Move(from, to));
+        TabDragReorder.Attach(TerminalTabs, (from, to) => _terminalTabs.Move(from, to));
         foreach (var name in TerminalView.ServiceNames)
             _chips.Add(new ServiceChip(name, name));
 
