@@ -23,6 +23,7 @@ public sealed class AdminProfile
     public string Color { get; set; } = Palette[0];
     public string GraphScopes { get; set; } = DefaultGraphScopes;
     public DateTime? LastUsed { get; set; }
+    public List<PinnedTab> PinnedTabs { get; set; } = [];
 
     /// <summary>Tenant für Anmeldungen: explizit gesetzt oder die Domain des UPN.</summary>
     [JsonIgnore]
@@ -73,4 +74,12 @@ public sealed class AdminProfile
 
     [JsonIgnore]
     public string LastUsedText => LastUsed is { } d ? "Zuletzt geöffnet " + d.ToString("dd.MM.yyyy HH:mm") : "Noch nie geöffnet";
+}
+
+/// <summary>Angehefteter Browser-Tab eines Profils.</summary>
+public sealed class PinnedTab
+{
+    public string Url { get; set; } = "";
+    public string? PortalKey { get; set; }
+    public string? Title { get; set; }
 }

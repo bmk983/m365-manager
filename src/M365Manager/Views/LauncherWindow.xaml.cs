@@ -47,39 +47,26 @@ public partial class LauncherWindow : FluentWindow
 
     // ------------------------------------------------------------------ Update-Hinweis
 
-    private const string InstallCommand = "irm https://raw.githubusercontent.com/bmk983/m365-manager/main/install.ps1 | iex";
-    private string? _releaseUrl;
+    private UpdateService.UpdateInfo? _update;
 
-    /// <summary>Fragt GitHub nach der neuesten Version. Rein informativ – es wird nichts automatisch geladen oder ersetzt.</summary>
+    /// <summary>Fragt GitHub nach der neuesten Version; installiert wird erst auf Knopfdruck.</summary>
     private async Task CheckForUpdateAsync()
     {
-        var current = typeof(App).Assembly.GetName().Version ?? new Version(0, 0);
-        VersionText.Text = "Version " + current.ToString(3) + " · portabel – nichts wird installiert.";
-        try
-        {
-            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("M365Manager/" + current.ToString(3));
-            using var doc = System.Text.Json.JsonDocument.Parse(
-                await http.GetStringAsync("https://api.github.com/repos/bmk983/m365-manager/releases/latest"));
-            var tag = doc.RootElement.GetProperty("tag_name").GetString()?.TrimStart('v');
-            if (!Version.TryParse(tag, out var latest)) return;
-            if (new Version(latest.Major, latest.Minor, Math.Max(latest.Build, 0)) <= new Version(current.Major, current.Minor, Math.Max(current.Build, 0))) return;
-
-            _releaseUrl = doc.RootElement.GetProperty("html_url").GetString();
-            UpdateText.Text = "Version " + latest.ToString(3) + " ist verfügbar (du hast " + current.ToString(3) + ").";
-            UpdateBar.Visibility = Visibility.Visible;
-        }
-        catch (Exception ex)
-        {
-            Log.Write("Update-Prüfung: " + ex.Message);   // offline o. Ä. – kein Problem
-        }
+        VersionText.Text = "Version " + UpdateService.Current.ToString(3) + " · portabel – nichts wird installiert.";
+        if (await UpdateService.CheckAsync() is not { } info) return;
+        _update = info;
+        UpdateText.Text = "Version " + info.Version.ToString(3) + " ist verfügbar (du hast " + UpdateService.Current.ToString(3) + ").";
+        UpdateBar.Visibility = Visibility.Visible;
     }
 
-    private void CopyUpdateCommand_Click(object sender, RoutedEventArgs e) => Clipboard.SetText(InstallCommand);
+    private async void InstallUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_update is not null) await App.InstallUpdateAsync(_update);
+    }
 
     private void OpenRelease_Click(object sender, RoutedEventArgs e)
     {
-        if (_releaseUrl is not null) Process.Start(new ProcessStartInfo(_releaseUrl) { UseShellExecute = true });
+        if (_update is not null) Process.Start(new ProcessStartInfo(_update.ReleaseUrl) { UseShellExecute = true });
     }
 
     // ------------------------------------------------------------------ Profile

@@ -280,6 +280,7 @@
     if (!res || !res.ok) { if (res && res.error) hint('Speichern fehlgeschlagen: ' + res.error); return false; }
     tab.path = res.path;
     tab.name = res.name;
+    rememberRecent(res.path);
     tab.savedVersion = tab.model.getAlternativeVersionId();
     renderTabs();
     updateStatus();
@@ -289,6 +290,7 @@
   }
 
   function openFile(path, name, content) {
+    rememberRecent(path);
     const existing = tabs.find(t => t.path && t.path.toLowerCase() === path.toLowerCase());
     if (existing) { activate(existing); return; }
     // Unveränderten, leeren Willkommens-Tab ersetzen
@@ -302,7 +304,34 @@
   function showPanel(title, html) {
     $('panelTitle').textContent = title;
     $('panelBody').innerHTML = html;
+    $('panel').classList.remove('wide');
     $('panel').hidden = false;
+  }
+  function openPanel(title, node, wide) {
+    $('panelTitle').textContent = title;
+    $('panelBody').replaceChildren(node);
+    $('panel').classList.toggle('wide', !!wide);
+    $('panel').hidden = false;
+  }
+  function closePanel() { $('panel').hidden = true; if (editor) editor.focus(); }
+  function smallButton(text, onClick) {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.addEventListener('click', e => { e.stopPropagation(); onClick(); });
+    return b;
+  }
+  function itemEl(title, desc, onClick, extra = []) {
+    const el = document.createElement('div');
+    el.className = 'item';
+    const txt = document.createElement('div');
+    txt.className = 'txt';
+    const t = document.createElement('div'); t.className = 't'; t.textContent = title;
+    const d = document.createElement('div'); d.className = 'd'; d.textContent = desc || '';
+    txt.append(t, d);
+    el.append(txt, ...extra.map(([label, fn]) => smallButton(label, fn)));
+    el.title = desc || title;
+    el.addEventListener('click', onClick);
+    return el;
   }
 
   async function loadAll() {
@@ -326,6 +355,145 @@
       html += '<div class="bad" style="margin-top:8px">Nicht geladen:</div><ul>' + failed.map(f => '<li><code>' + esc(f.name) + '</code>: ' + esc(f.error) + '</li>').join('') + '</ul>';
     showPanel('IntelliSense bereit', html);
     hint('IntelliSense: ' + (res.commands || 0) + ' Befehle geladen');
+  }
+
+  // ---------------------------------------------------------------- Zuletzt geöffnet
+  const RECENT_KEY = 'm365m.editor.recent';
+  const baseName = p => p.split(/[\\/]/).pop();
+  const dirName = p => p.slice(0, Math.max(0, p.length - baseName(p).length - 1));
+  function recentList() {
+    try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]').filter(p => typeof p === 'string'); } catch { return []; }
+  }
+  function storeRecent(list) { try { localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 15))); } catch { } }
+  function rememberRecent(path) {
+    if (!path) return;
+    storeRecent([path, ...recentList().filter(p => p.toLowerCase() !== path.toLowerCase())]);
+  }
+  function forgetRecent(path) { storeRecent(recentList().filter(p => p.toLowerCase() !== path.toLowerCase())); }
+
+  async function openRecent(path) {
+    const res = await request({ t: 'read', path }, 10000);
+    if (res && res.ok) { closePanel(); openFile(path, baseName(path), res.content); return; }
+    forgetRecent(path);
+    hint('Datei nicht mehr vorhanden – aus der Liste entfernt.');
+    showRecent();
+  }
+
+  function showRecent() {
+    const list = recentList();
+    const body = document.createElement('div');
+    if (!list.length) body.innerHTML = '<span class="muted">Noch keine Skripte geöffnet oder gespeichert.</span>';
+    for (const path of list) body.append(itemEl(baseName(path), dirName(path), () => openRecent(path), [['Entfernen', () => { forgetRecent(path); showRecent(); }]]));
+    openPanel('Zuletzt geöffnet', body, true);
+  }
+
+  // ---------------------------------------------------------------- Snippets
+  let snippetIndex = null;
+  async function builtinSnippets() {
+    if (!snippetIndex) {
+      try { snippetIndex = await (await fetch('snippets/index.json')).json(); } catch { snippetIndex = []; }
+    }
+    return snippetIndex;
+  }
+  async function snippetCode(s) {
+    if (s.content != null) return s.content;
+    const r = await fetch('snippets/' + s.file);
+    return (await r.text()).replace(/^﻿/, '');
+  }
+
+  function insertCode(code) {
+    if (!code.endsWith('\n')) code += '\n';
+    const model = active.model;
+    if (!isDirty(active) && model.getValue() === WELCOME) {
+      editor.executeEdits('snippet', [{ range: model.getFullModelRange(), text: code }]);
+      editor.setPosition({ lineNumber: 1, column: 1 });
+    } else {
+      const sel = editor.getSelection();
+      const line = model.getLineContent(sel.startLineNumber);
+      if (sel.isEmpty() && line.trim()) {
+        // Mitten in einer Zeile: als neuen Block unter der aktuellen Zeile einfügen
+        const end = model.getLineMaxColumn(sel.startLineNumber);
+        editor.executeEdits('snippet', [{ range: new monaco.Range(sel.startLineNumber, end, sel.startLineNumber, end), text: '\n' + code.replace(/\n$/, ''), forceMoveMarkers: true }]);
+      } else {
+        editor.executeEdits('snippet', [{ range: sel, text: code, forceMoveMarkers: true }]);
+      }
+    }
+    editor.pushUndoStop();
+    editor.focus();
+  }
+
+  async function useSnippet(s, newTab) {
+    const code = await snippetCode(s);
+    closePanel();
+    if (newTab || !active) createTab({ name: s.file && /\.ps1$/i.test(s.file) ? s.file : null, content: code.endsWith('\n') ? code : code + '\n' });
+    else insertCode(code);
+    hint('Snippet eingefügt – Platzhalter wie user@contoso.com anpassen.');
+  }
+
+  async function saveOwnSnippet() {
+    if (!active) return;
+    const sel = editor.getSelection();
+    const marked = sel && !sel.isEmpty();
+    const code = marked ? active.model.getValueInRange(sel) : active.model.getValue();
+    if (!code.trim()) { hint('Nichts zu speichern – erst Code schreiben oder markieren.'); return; }
+    const name = prompt('Name für das eigene Snippet' + (marked ? ' (markierter Code)' : ' (ganzes Skript)') + ':', active.name.replace(/\.ps1$/i, ''));
+    if (!name || !name.trim()) return;
+    const res = await request({ t: 'savesnippet', name: name.trim(), content: code }, 10000);
+    if (res && res.ok) { hint('Snippet „' + name.trim() + '“ gespeichert'); showSnippets(); }
+    else hint('Speichern fehlgeschlagen: ' + ((res && res.error) || 'keine Antwort'));
+  }
+
+  async function showSnippets() {
+    const own = await request({ t: 'snippets' }, 10000);
+    const ownItems = own && Array.isArray(own.items)
+      ? own.items.map(x => ({ cat: 'Eigene Snippets', name: x.name, desc: x.path, content: x.content, file: x.name + '.ps1' }))
+      : [];
+    const all = [...ownItems, ...(await builtinSnippets())];
+
+    const wrap = document.createElement('div');
+    const search = document.createElement('input');
+    search.className = 'search';
+    search.placeholder = 'Suchen … (↑↓ wählen, Enter = einfügen, Strg+Enter = neuer Tab)';
+    const list = document.createElement('div');
+    const foot = document.createElement('div');
+    foot.className = 'foot';
+    foot.append(smallButton('Markierung als eigenes Snippet speichern …', saveOwnSnippet),
+                smallButton('Ordner der eigenen Snippets öffnen', () => post({ t: 'snippetfolder' })));
+
+    let shown = [], sel = 0;
+    const render = () => {
+      const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+      shown = all.filter(s => words.every(w => (s.name + ' ' + (s.desc || '') + ' ' + s.cat).toLowerCase().includes(w)));
+      sel = Math.max(0, Math.min(sel, shown.length - 1));
+      list.replaceChildren();
+      let cat = null;
+      shown.forEach((s, i) => {
+        if (s.cat !== cat) {
+          cat = s.cat;
+          const c = document.createElement('div');
+          c.className = 'cat';
+          c.textContent = cat;
+          list.append(c);
+        }
+        const el = itemEl(s.name, s.desc, () => useSnippet(s, false), [['In neuem Tab', () => useSnippet(s, true)]]);
+        if (i === sel) { el.classList.add('sel'); requestAnimationFrame(() => el.scrollIntoView({ block: 'nearest' })); }
+        list.append(el);
+      });
+      if (!shown.length) list.innerHTML = '<span class="muted">Nichts gefunden.</span>';
+    };
+    search.addEventListener('input', () => { sel = 0; render(); });
+    search.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown') { sel++; render(); }
+      else if (e.key === 'ArrowUp') { sel--; render(); }
+      else if (e.key === 'Enter' && shown[sel]) useSnippet(shown[sel], e.ctrlKey);
+      else if (e.key === 'Escape') closePanel();
+      else return;
+      e.preventDefault();
+    });
+    wrap.append(search, list, foot);
+    render();
+    openPanel('Snippets', wrap, true);
+    search.focus();
   }
 
   // ---------------------------------------------------------------- Ausführen
@@ -440,6 +608,7 @@
         (e.ctrlKey && !e.shiftKey && k === 's') ? (active && save(active), true) :
         (e.ctrlKey && !e.shiftKey && k === 'n') ? (createTab(), true) :
         (e.ctrlKey && !e.shiftKey && k === 'o') ? (post({ t: 'open' }), true) :
+        (e.ctrlKey && !e.shiftKey && k === 'j') ? (showSnippets(), true) :
         (e.ctrlKey && !e.shiftKey && k === 'w') ? (active && closeTab(active), true) :
         (e.ctrlKey && e.key === 'Tab' && tabs.length > 1) ? (activate(tabs[(tabs.indexOf(active) + (e.shiftKey ? -1 : 1) + tabs.length) % tabs.length]), true) :
         false;
@@ -453,7 +622,9 @@
     $('btnRunSel').onclick = () => run('selection');
     $('btnStop').onclick = () => post({ t: 'stop' });
     $('btnLoad').onclick = loadAll;
-    $('panelClose').onclick = () => { $('panel').hidden = true; editor.focus(); };
+    $('btnRecent').onclick = showRecent;
+    $('btnSnippets').onclick = showSnippets;
+    $('panelClose').onclick = closePanel;
 
     if (!host) { createTab(); return; }   // ohne App (z. B. im Browser getestet)
 

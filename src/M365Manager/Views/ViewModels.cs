@@ -26,16 +26,28 @@ public sealed class BrowserTab(WebView2 view) : Observable
     private string _url = "";
     private bool _isSelected;
     private bool _isLoading;
+    private bool _isPinned;
     private ImageSource? _icon;
 
     public WebView2 View { get; } = view;
     public string? PortalKey { get; set; }
+    /// <summary>Adresse, die beim Anheften gemerkt wurde (öffnet sich beim nächsten Start).</summary>
+    public string? PinnedUrl { get; set; }
 
     public string Title { get => _title; set => Set(ref _title, value); }
     public string Url { get => _url; set => Set(ref _url, value); }
     public bool IsSelected { get => _isSelected; set => Set(ref _isSelected, value); }
     public bool IsLoading { get => _isLoading; set => Set(ref _isLoading, value); }
     public ImageSource? Icon { get => _icon; set => Set(ref _icon, value); }
+
+    /// <summary>Angeheftet: schmal, links, öffnet sich beim nächsten Start des Profils wieder.</summary>
+    public bool IsPinned
+    {
+        get => _isPinned;
+        set { Set(ref _isPinned, value); Raise(nameof(PinHeader)); }
+    }
+
+    public string PinHeader => _isPinned ? "Tab lösen" : "Tab anheften";
 }
 
 public sealed class TerminalTab(TerminalView view) : Observable

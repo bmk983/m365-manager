@@ -58,7 +58,7 @@ public partial class MainWindow : FluentWindow
         BrowserTabs.ItemsSource = _tabs;
         TerminalTabs.ItemsSource = _terminalTabs;
         ServiceChips.ItemsSource = _chips;
-        TabDragReorder.Attach(BrowserTabs, (from, to) => _tabs.Move(from, to));
+        TabDragReorder.Attach(BrowserTabs, MoveTab);
         TabDragReorder.Attach(TerminalTabs, (from, to) => _terminalTabs.Move(from, to));
         foreach (var name in TerminalView.ServiceNames)
             _chips.Add(new ServiceChip(name, name));
@@ -70,12 +70,15 @@ public partial class MainWindow : FluentWindow
 
         ProfileStore.Changed += OnProfilesChanged;
         ApplicationThemeManager.Changed += OnThemeChanged;
+        UpdateService.Available += OnUpdateAvailable;
         PreviewKeyDown += OnPreviewKeyDown;
 
         Loaded += async (_, _) =>
         {
             AddTerminal();
+            await OpenPinnedTabsAsync();
             await OpenPortalAsync(Portal.All[0], forceNewTab: false);
+            if (await UpdateService.CheckAsync() is { } update) OnUpdateAvailable(update);
         };
     }
 
@@ -121,6 +124,40 @@ public partial class MainWindow : FluentWindow
                 return;
         }
         ProfileStore.Save(p);
+    }
+
+    // ------------------------------------------------------------------ App-Update
+
+    private UpdateService.UpdateInfo? _update;
+
+    private void OnUpdateAvailable(UpdateService.UpdateInfo info)
+    {
+        if (_closed) return;
+        _update = info;
+        UpdateNavText.Text = "Update auf " + info.Version.ToString(3);
+        UpdateNavButton.ToolTip = "Version " + info.Version.ToString(3) + " ist verfügbar (installiert: " + UpdateService.Current.ToString(3) + "). Klick: jetzt aktualisieren";
+        UpdateNavButton.Visibility = Visibility.Visible;
+    }
+
+    private async void InstallUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_update is not null) await App.InstallUpdateAsync(_update);
+    }
+
+    private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        if (await UpdateService.CheckAsync(force: true) is { } info)
+        {
+            OnUpdateAvailable(info);
+            await App.InstallUpdateAsync(info);
+            return;
+        }
+        await new MessageBox
+        {
+            Title = "Kein Update gefunden",
+            Content = "Installiert ist Version " + UpdateService.Current.ToString(3) + " – eine neuere wurde nicht gefunden.\n\n(Ohne Internetverbindung ist keine Prüfung möglich.)",
+            CloseButtonText = "OK",
+        }.ShowDialogAsync();
     }
 
     private void ProfileButton_Click(object sender, RoutedEventArgs e)
@@ -234,8 +271,9 @@ public partial class MainWindow : FluentWindow
         if (core is not null) await core.Profile.ClearBrowsingDataAsync();
         _tokens.Clear();
 
-        foreach (var tab in _tabs.ToList()) CloseTab(tab);
-        await OpenPortalAsync(Portal.All[0], forceNewTab: true);
+        foreach (var tab in _tabs.ToList()) CloseTab(tab, user: false);
+        await OpenPinnedTabsAsync();
+        await OpenPortalAsync(Portal.All[0], forceNewTab: false);
     }
 
     // ================================================================== Portale
@@ -331,7 +369,7 @@ public partial class MainWindow : FluentWindow
         };
         core.FaviconChanged += async (_, _) => tab.Icon = await LoadFaviconAsync(core);
         core.NewWindowRequested += OnNewWindowRequested;
-        core.WindowCloseRequested += (_, _) => CloseTab(tab);
+        core.WindowCloseRequested += (_, _) => CloseTab(tab, user: false);
         core.ProcessFailed += (_, e) => Dispatcher.BeginInvoke(() => OnBrowserProcessFailed(tab, core, e.ProcessFailedKind));
 
         if (url is not null) core.Navigate(url);
@@ -353,10 +391,11 @@ public partial class MainWindow : FluentWindow
                     break;
                 case CoreWebView2ProcessFailedKind.BrowserProcessExited:
                     WebViewEnvironments.Forget(_profile.Id, core.Environment);
-                    var (url, key, wasActive) = (tab.Url, tab.PortalKey, tab == _activeTab);
+                    var (url, key, wasActive, pinned, pinnedUrl) = (tab.Url, tab.PortalKey, tab == _activeTab, tab.IsPinned, tab.PinnedUrl);
                     var index = _tabs.IndexOf(tab);
-                    CloseTab(tab);
+                    CloseTab(tab, user: false);
                     var fresh = await CreateTabAsync(string.IsNullOrEmpty(url) ? Portal.All[0].Url(_profile) : url, key);
+                    (fresh.IsPinned, fresh.PinnedUrl) = (pinned, pinnedUrl);
                     _tabs.Move(_tabs.IndexOf(fresh), Math.Min(index, _tabs.Count - 1));
                     if (!wasActive && _activeTab == fresh && _tabs.Count > 1) SelectTab(_tabs[Math.Max(0, index - 1)]);
                     break;
@@ -450,11 +489,13 @@ public partial class MainWindow : FluentWindow
         UpdateEmptyState();
     }
 
-    private void CloseTab(BrowserTab tab)
+    /// <param name="user">Vom Nutzer geschlossen: Ein angehefteter Tab wird dann auch aus den gemerkten Tabs entfernt.</param>
+    private void CloseTab(BrowserTab tab, bool user = true)
     {
         var index = _tabs.IndexOf(tab);
         if (index < 0) return;
         _tabs.RemoveAt(index);
+        if (user && tab.IsPinned) SavePinnedTabs();
         BrowserHost.Children.Remove(tab.View);
         tab.View.Dispose();
 
@@ -505,6 +546,93 @@ public partial class MainWindow : FluentWindow
     private void TabClose_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is BrowserTab tab) CloseTab(tab);
+    }
+
+    // ------------------------------------------------------------------ Tab-Menü, Anheften, Reihenfolge
+
+    private static BrowserTab? TabOf(object sender) => (sender as FrameworkElement)?.DataContext as BrowserTab;
+
+    private int PinnedCount => _tabs.Count(t => t.IsPinned);
+
+    /// <summary>Verschieben per Ziehen: Angeheftete Tabs bleiben unter sich links, die anderen rechts davon.</summary>
+    private void MoveTab(int from, int to)
+    {
+        var tab = _tabs[from];
+        var pinned = PinnedCount;
+        to = tab.IsPinned ? Math.Min(to, pinned - 1) : Math.Max(to, pinned);
+        if (to == from) return;
+        _tabs.Move(from, to);
+        if (tab.IsPinned) SavePinnedTabs();
+    }
+
+    private void TabReload_Click(object sender, RoutedEventArgs e) => TabOf(sender)?.View.CoreWebView2?.Reload();
+
+    private void TabCopyUrl_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf(sender) is { Url.Length: > 0 } tab) Clipboard.SetText(tab.Url);
+    }
+
+    private async void TabDuplicate_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf(sender) is not { } tab || string.IsNullOrEmpty(tab.Url)) return;
+        var copy = await CreateTabAsync(tab.Url, tab.PortalKey);
+        var target = Math.Max(_tabs.IndexOf(tab) + 1, PinnedCount);
+        var index = _tabs.IndexOf(copy);
+        if (index >= 0 && target < _tabs.Count && target != index) _tabs.Move(index, target);
+    }
+
+    private void TabPin_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf(sender) is not { } tab) return;
+        var index = _tabs.IndexOf(tab);
+        if (tab.IsPinned)
+        {
+            tab.IsPinned = false;
+            tab.PinnedUrl = null;
+            _tabs.Move(index, PinnedCount);              // direkt hinter die angehefteten
+        }
+        else
+        {
+            var pinned = PinnedCount;
+            tab.IsPinned = true;
+            tab.PinnedUrl = string.IsNullOrEmpty(tab.Url) ? Portal.All[0].Url(_profile) : tab.Url;
+            _tabs.Move(index, pinned);                   // ans Ende der angehefteten
+        }
+        SavePinnedTabs();
+    }
+
+    private void TabCloseOthers_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf(sender) is not { } keep) return;
+        foreach (var t in _tabs.Where(t => t != keep && !t.IsPinned).ToList()) CloseTab(t);
+        SelectTab(keep);
+    }
+
+    private void TabCloseRight_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf(sender) is not { } tab) return;
+        foreach (var t in _tabs.Skip(_tabs.IndexOf(tab) + 1).Where(t => !t.IsPinned).ToList()) CloseTab(t);
+    }
+
+    private void SavePinnedTabs()
+    {
+        var p = ProfileStore.Get(_profile.Id) ?? _profile;
+        p.PinnedTabs = _tabs.Where(t => t.IsPinned)
+            .Select(t => new PinnedTab { Url = t.PinnedUrl ?? t.Url, PortalKey = t.PortalKey, Title = t.Title })
+            .ToList();
+        ProfileStore.Save(p);
+    }
+
+    private async Task OpenPinnedTabsAsync()
+    {
+        foreach (var pin in _profile.PinnedTabs.ToList())
+        {
+            if (!Uri.TryCreate(pin.Url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps) continue;
+            var tab = await CreateTabAsync(pin.Url, pin.PortalKey);
+            tab.IsPinned = true;
+            tab.PinnedUrl = pin.Url;
+            if (!string.IsNullOrWhiteSpace(pin.Title) && tab.Title == "Lädt …") tab.Title = pin.Title;
+        }
     }
 
     private void TabScroller_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -671,6 +799,7 @@ public partial class MainWindow : FluentWindow
         };
         view.ProfileValueReported += OnProfileValueReported;
         view.TokenProvider = (service, extraScopes, fresh, reauth, notify) => _tokens.GetAsync(service, extraScopes, fresh, reauth, notify);
+        view.GridProvider = (json, mode) => GridWindow.ShowAsync(this, json, mode);
         TerminalHost.Children.Add(view);
 
         var tab = new TerminalTab(view);
@@ -897,6 +1026,7 @@ public partial class MainWindow : FluentWindow
         _closed = true;
         ProfileStore.Changed -= OnProfilesChanged;
         ApplicationThemeManager.Changed -= OnThemeChanged;
+        UpdateService.Available -= OnUpdateAvailable;
 
         foreach (var t in _terminalTabs) t.View.Dispose();
         foreach (var t in _tabs) t.View.Dispose();

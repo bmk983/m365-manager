@@ -141,6 +141,19 @@ public sealed class EditorView : Grid, IDisposable
                 break;
             }
 
+            case "snippets":
+                Post(new { t = "res", id, items = ReadOwnSnippets() });
+                break;
+
+            case "savesnippet":
+                Reply(id, SaveOwnSnippet(Str("name") ?? "", Str("content") ?? ""));
+                break;
+
+            case "snippetfolder":
+                Directory.CreateDirectory(SnippetsDir);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", "\"" + SnippetsDir + "\"") { UseShellExecute = true });
+                break;
+
             case "complete":
             {
                 var (raw, status) = await CompletionService.CompleteAsync(Str("code") ?? "", m.GetProperty("offset").GetInt32());
@@ -212,6 +225,46 @@ public sealed class EditorView : Grid, IDisposable
             var bom = !File.Exists(path) || HasBom(path);
             File.WriteAllText(path, content, new UTF8Encoding(bom));
             return new() { ["ok"] = true, ["path"] = path, ["name"] = Path.GetFileName(path) };
+        }
+        catch (Exception ex)
+        {
+            return new() { ["ok"] = false, ["error"] = ex.Message };
+        }
+    }
+
+    // ------------------------------------------------------------------ eigene Snippets (Ordner scripts\Snippets)
+
+    private static string SnippetsDir => Path.Combine(AppPaths.UserScriptsDir, "Snippets");
+
+    private static List<object> ReadOwnSnippets()
+    {
+        var list = new List<object>();
+        if (!Directory.Exists(SnippetsDir)) return list;
+        foreach (var file in Directory.EnumerateFiles(SnippetsDir, "*.ps1").OrderBy(f => f, StringComparer.CurrentCultureIgnoreCase))
+        {
+            try
+            {
+                if (new FileInfo(file).Length > 512 * 1024) continue;
+                list.Add(new { name = Path.GetFileNameWithoutExtension(file), path = file, content = (string)ReadFile(file)["content"]! });
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Snippet " + file + ": " + ex.Message);
+            }
+        }
+        return list;
+    }
+
+    private static Dictionary<string, object?> SaveOwnSnippet(string name, string content)
+    {
+        try
+        {
+            var safe = string.Concat(name.Split(Path.GetInvalidFileNameChars())).Trim().TrimEnd('.');
+            if (safe.Length == 0) return new() { ["ok"] = false, ["error"] = "Ungültiger Name." };
+            Directory.CreateDirectory(SnippetsDir);
+            var path = Path.Combine(SnippetsDir, safe + ".ps1");
+            File.WriteAllText(path, content, new UTF8Encoding(true));
+            return new() { ["ok"] = true, ["path"] = path };
         }
         catch (Exception ex)
         {

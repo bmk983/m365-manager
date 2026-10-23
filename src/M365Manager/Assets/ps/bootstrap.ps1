@@ -90,9 +90,22 @@ function Get-M365Token {
         [switch]$Fresh,    # kein zwischengespeichertes Token verwenden – neu ausstellen lassen
         [switch]$Reauth    # zusätzlich interaktiv neu anmelden (z. B. nach Claims Challenge)
     )
-    if (-not $env:M365M_PIPE) { throw 'Kein Kanal zur App vorhanden.' }
     $flags = @($(if ($Fresh -or $Reauth) { 'fresh' }), $(if ($Reauth) { 'reauth' }) | Where-Object { $_ }) -join ','
-    $request = "token|$Service|$(($ExtraScopes -join ' ') -replace '\|', '')|$flags"
+    $answer = Invoke-M365HostRequest "token|$Service|$(($ExtraScopes -join ' ') -replace '\|', '')|$flags" -What "Token-Anfrage $Service"
+    $parts = $answer.Split('|', 2)
+    [pscustomobject]@{
+        Token     = $parts[0]
+        ExpiresOn = [DateTimeOffset]::FromUnixTimeSeconds([long]$parts[1])
+    }
+}
+
+function Invoke-M365HostRequest {
+    <#
+    .SYNOPSIS
+        Schickt eine Anfrage an die App und wartet auf die Antwort (Text nach "ok|").
+    #>
+    param([Parameter(Mandatory)][string]$Request, [string]$What = 'Anfrage')
+    if (-not $env:M365M_PIPE) { throw 'Kein Kanal zur App vorhanden.' }
 
     # Nie blind warten: Die App meldet sich während der Bearbeitung alle 10 s ("pending").
     # Bleibt sie 45 s stumm, ist der Kanal gestört -> neu verbinden und die Anfrage einmal wiederholen.
@@ -104,7 +117,7 @@ function Get-M365Token {
             continue
         }
         $id = [guid]::NewGuid().ToString('N')
-        try { $global:M365PipeWriter.WriteLine("req|$id|$request") }
+        try { $global:M365PipeWriter.WriteLine("req|$id|$Request") }
         catch { Reset-M365Channel; if ($attempt -eq 2) { throw "Kanal zur App gestört: $($_.Exception.Message)" }; continue }
 
         $deadline = (Get-Date).AddSeconds(45)
@@ -121,21 +134,16 @@ function Get-M365Token {
             $global:M365PendingRead = $null
             if ($null -eq $line) { break }                              # Kanal getrennt
 
-            $parts = $line.Split('|', 5)
+            $parts = $line.Split('|', 4)
             if ($parts[0] -ne 'res' -or $parts[1] -ne $id) { continue }
             switch ($parts[2]) {
                 'pending' {
-                    if ($parts[3]) { Write-M365 $parts[3] DarkGray; $deadline = (Get-Date).AddMinutes(15); $waitingNoted = $true }   # Anmeldefenster: Zeit lassen
+                    if ($parts[3]) { Write-M365 $parts[3] DarkGray; $deadline = (Get-Date).AddMinutes(15); $waitingNoted = $true }   # Fenster offen: Zeit lassen
                     elseif ($deadline -lt (Get-Date).AddSeconds(45)) { $deadline = (Get-Date).AddSeconds(45) }
                     if (-not $waitingNoted -and -not $parts[3]) { Write-M365 'Warte auf die App …' DarkGray; $waitingNoted = $true }
                     continue
                 }
-                'ok' {
-                    return [pscustomobject]@{
-                        Token     = $parts[3]
-                        ExpiresOn = [DateTimeOffset]::FromUnixTimeSeconds([long]$parts[4])
-                    }
-                }
+                'ok' { return $(if ($parts.Count -gt 3) { $parts[3] } else { '' }) }
                 default { throw $parts[3] }
             }
         }
@@ -143,8 +151,8 @@ function Get-M365Token {
         Reset-M365Channel
         if ($attempt -eq 1) { Write-M365 'Keine Antwort von der App – baue die Verbindung neu auf und versuche es erneut …' DarkYellow }
     }
-    Send-M365Host "log|Token-Anfrage ${Service}: keine Antwort der App nach zwei Versuchen"
-    throw 'Die App antwortet nicht auf die Anmeldeanfrage. Bitte das Terminal neu starten (↻).'
+    Send-M365Host "log|${What}: keine Antwort der App nach zwei Versuchen"
+    throw 'Die App antwortet nicht. Bitte das Terminal neu starten (↻).'
 }
 
 function Reset-M365Channel {
@@ -885,6 +893,112 @@ function Install-M365Module {
     }
     Write-M365 'Tipp: In einem neuen Terminal (+) ist das Modul sofort sauber verfügbar.' DarkGray
 }
+# ------------------------------------------------------------------ Tabellenfenster (Out-GridView)
+
+function Format-M365GridValue($Value) {
+    if ($null -eq $Value) { return '' }
+    if ($Value -is [string]) { return $Value }
+    if ($Value -is [datetime]) { return $Value.ToString('yyyy-MM-dd HH:mm:ss') }
+    if ($Value -is [datetimeoffset]) { return $Value.LocalDateTime.ToString('yyyy-MM-dd HH:mm:ss') }
+    if ($Value -is [bool] -or $Value -is [enum] -or $Value -is [guid] -or $Value -is [timespan]) { return $Value.ToString() }
+    if ($Value -is [ValueType]) { return $Value }                       # Zahlen bleiben Zahlen (Sortierung)
+    if ($Value -is [System.Collections.IDictionary]) {
+        return (@($Value.GetEnumerator() | Select-Object -First 10 | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join '; ')
+    }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        return (@($Value | Select-Object -First 20 | ForEach-Object { Format-M365GridValue $_ }) -join ', ')
+    }
+    $text = "$Value"
+    if ($text -ne $Value.GetType().FullName) { return $text }
+    # Objekt ohne sinnvolle Textform (z. B. Graph-Typen): die ersten gefüllten Eigenschaften zeigen
+    return (@($Value.PSObject.Properties | Where-Object { $_.Name -ne 'AdditionalProperties' -and $null -ne $_.Value -and "$($_.Value)" -ne '' } |
+        Select-Object -First 4 | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join '; ')
+}
+
+function ConvertTo-M365GridData([System.Collections.Generic.List[object]]$Items, [string]$Title) {
+    $sample = @($Items | Select-Object -First 50 | ForEach-Object { if ($_ -is [psobject]) { $_.PSObject.BaseObject } else { $_ } })
+    $scalar = -not ($sample | Where-Object { $_ -isnot [string] -and $_ -isnot [ValueType] })
+
+    if ($scalar) { $columns = @('Wert') }
+    else {
+        # Spalten: Standardansicht des Typs zuerst, dann alle weiteren Eigenschaften (Vereinigung der ersten 50 Objekte)
+        $names = [System.Collections.Generic.List[string]]::new()
+        $first = $Items[0]
+        $display = try { $first.PSStandardMembers.DefaultDisplayPropertySet.ReferencedPropertyNames } catch { $null }
+        $preferred = @($display) + @('Name', 'DisplayName', 'UserPrincipalName', 'PrimarySmtpAddress', 'Mail', 'Identity', 'Id') | Where-Object { $_ }
+        $kinds = 'Property', 'NoteProperty', 'AliasProperty', 'ScriptProperty', 'CodeProperty'
+        $all = foreach ($o in ($Items | Select-Object -First 50)) { ([psobject]$o).PSObject.Properties | Where-Object { $_.MemberType -in $kinds } | ForEach-Object Name }
+        $all = @($all | Select-Object -Unique)
+        foreach ($n in $preferred) { if ($n -in $all -and -not $names.Contains($n)) { $names.Add($n) } }
+        foreach ($n in $all) { if (-not $names.Contains($n) -and $n -ne 'AdditionalProperties') { $names.Add($n) } }
+        $columns = @($names)
+    }
+
+    $rows = [System.Collections.Generic.List[object]]::new($Items.Count)
+    foreach ($o in $Items) {
+        if ($scalar) { $rows.Add(@(, (Format-M365GridValue $o))); continue }
+        $row = [object[]]::new($columns.Count)
+        $props = ([psobject]$o).PSObject.Properties
+        for ($i = 0; $i -lt $columns.Count; $i++) {
+            $p = $props[$columns[$i]]
+            $row[$i] = if ($p) { try { Format-M365GridValue $p.Value } catch { '' } } else { '' }
+        }
+        $rows.Add($row)
+    }
+
+    # Spalten ohne einen einzigen Wert weglassen (Graph-Objekte haben Dutzende leere Eigenschaften)
+    $keep = @(for ($i = 0; $i -lt $columns.Count; $i++) { foreach ($r in $rows) { if ("$($r[$i])" -ne '') { $i; break } } })
+    if ($keep.Count -eq 0) { $keep = @(0) }
+    $data = [ordered]@{
+        title   = $Title
+        columns = @($keep | ForEach-Object { $columns[$_] })
+        rows    = @(foreach ($r in $rows) { , @($keep | ForEach-Object { $r[$_] }) })
+    }
+    ConvertTo-Json $data -Depth 4 -Compress
+}
+
+function Out-GridView {
+    <#
+    .SYNOPSIS
+        Zeigt Objekte im Tabellenfenster der App (filtern, sortieren, kopieren, als CSV/Excel speichern).
+        -PassThru / -OutputMode Single|Multiple: ausgewählte Zeilen kommen zurück in die Pipeline.
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'PassThru')]
+    param(
+        [Parameter(ValueFromPipeline)][psobject]$InputObject,
+        [string]$Title,
+        [Parameter(ParameterSetName = 'PassThru')][switch]$PassThru,
+        [Parameter(ParameterSetName = 'OutputMode')][ValidateSet('None', 'Single', 'Multiple')][string]$OutputMode = 'None',
+        [Parameter(ParameterSetName = 'Wait')][switch]$Wait
+    )
+    begin { $items = [System.Collections.Generic.List[object]]::new() }
+    process {
+        if ($null -eq $InputObject) { return }
+        if ($MyInvocation.ExpectingInput) { $items.Add($InputObject) }
+        else { foreach ($x in $InputObject) { if ($null -ne $x) { $items.Add($x) } } }
+    }
+    end {
+        $mode = if ($PassThru) { 'multiple' } elseif ($OutputMode -ne 'None') { $OutputMode.ToLowerInvariant() } elseif ($Wait) { 'wait' } else { 'none' }
+        if (-not $Title) { $Title = ($MyInvocation.Line.Trim() -replace '\s+', ' ') }
+        if ($Title.Length -gt 140) { $Title = $Title.Substring(0, 137) + '…' }
+
+        if (-not $env:M365M_PIPE) {
+            $items | Format-Table -AutoSize | Out-Host
+            if ($mode -in 'multiple', 'single') { return $items }
+            return
+        }
+        if ($items.Count -eq 0) { Write-M365 'Out-GridView: keine Daten.' DarkGray; return }
+        if ($items.Count -gt 2000) { Write-M365 "Bereite $($items.Count) Zeilen für das Tabellenfenster auf …" DarkGray }
+
+        $payload = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((ConvertTo-M365GridData $items $Title)))
+        if ($mode -eq 'none') { Send-M365Host "grid|none|$payload"; return }
+
+        $answer = Invoke-M365HostRequest "grid|$mode|$payload" -What 'Tabellenfenster'
+        if ($mode -eq 'wait' -or -not $answer) { return }
+        foreach ($i in $answer.Split(',')) { if ($i -match '^\d+$' -and [int]$i -lt $items.Count) { $items[[int]$i] } }
+    }
+}
+
 function Get-M365Help {
     $c = "`e[36m"; $r = "`e[0m"; $d = "`e[90m"
     Write-Host ''
@@ -903,6 +1017,7 @@ function Get-M365Help {
     Write-Host "  Get-M365Status                                               Verbindungsstatus"
     Write-Host "  Set-M365AutoConnect `$false                                  Auto-Verbinden aus"
     Write-Host "  Set-M365ConnectOverride `$false                              Connect-* aus Skripten nicht abfangen"
+    Write-Host "  … | Out-GridView [-PassThru]                                 Tabellenfenster: filtern, sortieren, Excel/CSV"
     Write-Host ''
     Write-Host "  ${c}Graph-Berechtigungen${r}"
     Write-Host "  Get-M365GraphPermissions                                     Token, Scopes, Rollen, Status je Funktion"

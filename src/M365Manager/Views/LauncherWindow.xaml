@@ -105,10 +105,10 @@
                             <StackPanel>
                                 <TextBlock x:Name="UpdateText" FontWeight="SemiBold" TextWrapping="Wrap" />
                                 <TextBlock FontSize="11" Margin="0,3,0,8" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                           Text="App schließen und den Installationsbefehl erneut in PowerShell ausführen." />
+                                           Text="Die App lädt die neue Version von GitHub, prüft die Prüfsumme und startet neu." />
                                 <StackPanel Orientation="Horizontal">
-                                    <ui:Button Content="Befehl kopieren" Icon="{ui:SymbolIcon Copy20}" Appearance="Primary"
-                                               Click="CopyUpdateCommand_Click" Margin="0,0,8,0" />
+                                    <ui:Button Content="Jetzt aktualisieren" Icon="{ui:SymbolIcon ArrowDownload20}" Appearance="Primary"
+                                               Click="InstallUpdate_Click" Margin="0,0,8,0" />
                                     <ui:Button Content="Was ist neu?" Icon="{ui:SymbolIcon Open20}" Click="OpenRelease_Click" />
                                 </StackPanel>
                             </StackPanel>

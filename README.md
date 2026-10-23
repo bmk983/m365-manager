@@ -32,6 +32,24 @@ Beim ersten Start lädt die App einmalig:
 
 Alles liegt danach im Ordner `M365Manager-Data` neben der EXE. Kopierst du EXE und Ordner auf einen USB-Stick, läuft die App auch dort. Ist der Ordner neben der EXE nicht beschreibbar, nutzt die App stattdessen `%LOCALAPPDATA%\M365Manager`.
 
+**Updates:** Gibt es eine neue Version, zeigen Startfenster und Seitenleiste „Update auf x.y.z“. Ein Klick lädt sie von GitHub, prüft die SHA-256-Prüfsumme, tauscht die EXE aus und startet neu (das offene Profil öffnet sich wieder). Manuell: Profil-Menü → **Nach App-Update suchen**.
+
+## Browser-Tabs
+
+- Tabs mit der Maus **verschieben** (auch die Terminal-Tabs).
+- **Rechtsklick** auf einen Tab: Neu laden, Duplizieren, Anheften, Adresse kopieren, Schließen, Andere Tabs schließen, Tabs rechts davon schließen.
+- **Angeheftete Tabs** werden schmal, bleiben links und öffnen sich beim nächsten Start des Profils wieder.
+
+## Tabellenfenster (Out-GridView)
+
+`… | Out-GridView` öffnet die Ausgabe in einem Tabellenfenster der App: filtern (mehrere Wörter), nach Spalten sortieren, Spalten verschieben, **Kopieren** (direkt in Excel einfügbar), **CSV speichern** oder **In Excel öffnen**. Leere Spalten werden ausgeblendet.
+
+Mit `-PassThru` (mehrere) bzw. `-OutputMode Single` wählt man Zeilen aus, die zurück in die Pipeline gehen:
+
+```powershell
+Get-MgSubscribedSku -All | Select-Object SkuPartNumber, SkuId | Out-GridView -OutputMode Single
+```
+
 ## Profile
 
 Jedes Profil hat:
@@ -73,7 +91,8 @@ In der Seitenleiste unter **Skript-Editor** öffnet sich ein Editor wie in VS Co
 - PowerShell-Farben wie in VS Code, mehrere Skripte als Tabs, Suchen/Ersetzen, Minimap, Code einklappen (`#region`)
 - **IntelliSense:** Cmdlets aller Module, Parameter, Parameterwerte, Variablen und Pfade, dieselben Vorschläge wie Tab im Terminal. **Tab** oder **Enter** übernimmt, **Strg+Leertaste** öffnet die Liste.
 - **F5** führt das Skript im aktiven Terminal aus, **F8** die Auswahl bzw. die aktuelle Zeile. Es läuft in der bereits verbundenen Sitzung (Graph, Exchange, …), Variablen bleiben danach verfügbar.
-- Eigene Skripte liegen standardmäßig in `M365Manager-Data\scripts`. **Strg+O / Strg+S** öffnet bzw. speichert. Offene Skripte, auch ungespeicherte, sind beim nächsten Start wieder da.
+- Eigene Skripte liegen standardmäßig in `M365Manager-Data\scripts`. **Strg+O / Strg+S** öffnet bzw. speichert. Offene Skripte, auch ungespeicherte, sind beim nächsten Start wieder da. Die Uhr in der Werkzeugleiste zeigt die **zuletzt geöffneten** Skripte.
+- **Snippets (Strg+J):** fertige Bausteine für typische Aufgaben (Offboarding, Postfach- und Kalenderrechte, MFA zurücksetzen, Temporary Access Pass, Lizenzen, Weiterleitungen, Gruppenmitglieder …). Suchen, Enter fügt ein, Strg+Enter öffnet in neuem Tab. Markierten Code als **eigenes Snippet** speichern; eigene Snippets liegen als `.ps1` in `M365Manager-Data\scripts\Snippets`.
 
 Hinweis: Exchange- und Purview-Cmdlets (z. B. `Get-Mailbox`) erscheinen erst in den Vorschlägen, wenn sie im Terminal einmal verbunden wurden. Sie entstehen erst beim Verbinden.
 
@@ -85,6 +104,7 @@ Hinweis: Exchange- und Purview-Cmdlets (z. B. `Get-Mailbox`) erscheinen erst in 
 | Strg+T / Strg+W          | Browser-Tab öffnen / schließen             |
 | Strg+L                   | Adresszeile                                |
 | Strg+Tab                 | Nächster Browser-Tab                       |
+| Strg+J (im Editor)       | Snippets                                   |
 | Strg+Klick auf Portal    | Portal in neuem Tab                        |
 | Rechtsklick im Terminal  | Kopieren (bei Auswahl) / Einfügen          |
 | Strg + / Strg - im Terminal | Schriftgröße                            |

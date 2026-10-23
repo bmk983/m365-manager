@@ -1,0 +1,128 @@
+[
+ {
+  "file": "grundgeruest.ps1",
+  "cat": "Allgemein",
+  "name": "Grundgerüst für ein Skript",
+  "desc": "Parameter, Hilfe, -WhatIf und Fehlerbehandlung"
+ },
+ {
+  "file": "csv-massenaenderung.ps1",
+  "cat": "Allgemein",
+  "name": "Massenänderung aus CSV",
+  "desc": "Jede Zeile einer CSV verarbeiten, Ergebnis pro Zeile als Tabelle"
+ },
+ {
+  "file": "offboarding.ps1",
+  "cat": "Benutzer",
+  "name": "Offboarding eines Benutzers",
+  "desc": "Sperren, Sitzungen beenden, Postfach freigeben, Gruppen und Lizenzen entfernen"
+ },
+ {
+  "file": "admin-rollen.ps1",
+  "cat": "Benutzer",
+  "name": "Wer hat welche Admin-Rolle?",
+  "desc": "Alle aktiven Rollenmitglieder als Tabelle"
+ },
+ {
+  "file": "inaktive-gaeste.ps1",
+  "cat": "Benutzer",
+  "name": "Inaktive Gastkonten",
+  "desc": "Gäste ohne Anmeldung seit X Tagen"
+ },
+ {
+  "file": "mfa-methoden.ps1",
+  "cat": "MFA",
+  "name": "MFA-Methoden anzeigen",
+  "desc": "Registrierte Anmeldemethoden eines Benutzers"
+ },
+ {
+  "file": "mfa-zuruecksetzen.ps1",
+  "cat": "MFA",
+  "name": "MFA zurücksetzen (Methoden auswählen)",
+  "desc": "Methoden in einer Tabelle auswählen und entfernen"
+ },
+ {
+  "file": "tap.ps1",
+  "cat": "MFA",
+  "name": "Temporary Access Pass erstellen",
+  "desc": "Einmal-Code für die Neueinrichtung von MFA"
+ },
+ {
+  "file": "postfach-rechte.ps1",
+  "cat": "Exchange",
+  "name": "Postfach: Vollzugriff und Senden als",
+  "desc": "Rechte auf ein (freigegebenes) Postfach vergeben"
+ },
+ {
+  "file": "postfach-rechte-anzeigen.ps1",
+  "cat": "Exchange",
+  "name": "Postfach: Rechte anzeigen",
+  "desc": "Wer hat Vollzugriff / Senden als?"
+ },
+ {
+  "file": "kalender-rechte.ps1",
+  "cat": "Exchange",
+  "name": "Kalender: Berechtigung setzen",
+  "desc": "Funktioniert unabhängig von der Postfachsprache (Kalender/Calendar)"
+ },
+ {
+  "file": "postfachgroessen.ps1",
+  "cat": "Exchange",
+  "name": "Postfachgrößen",
+  "desc": "Alle Benutzer- und freigegebenen Postfächer nach Größe"
+ },
+ {
+  "file": "weiterleitungen.ps1",
+  "cat": "Exchange",
+  "name": "Weiterleitungen finden",
+  "desc": "Postfächer mit Weiterleitung und Posteingangsregeln, die weiterleiten"
+ },
+ {
+  "file": "nachrichtenverfolgung.ps1",
+  "cat": "Exchange",
+  "name": "Nachrichtenverfolgung",
+  "desc": "Mails eines Absenders der letzten 2 Tage"
+ },
+ {
+  "file": "lizenzen-uebersicht.ps1",
+  "cat": "Lizenzen",
+  "name": "Lizenzübersicht",
+  "desc": "Gekauft, vergeben, frei"
+ },
+ {
+  "file": "lizenz-benutzer.ps1",
+  "cat": "Lizenzen",
+  "name": "Wer hat Lizenz X?",
+  "desc": "Lizenz in einer Liste wählen, Benutzer anzeigen"
+ },
+ {
+  "file": "lizenz-zuweisen.ps1",
+  "cat": "Lizenzen",
+  "name": "Lizenz zuweisen",
+  "desc": "Lizenz in einer Liste wählen und einem Benutzer geben"
+ },
+ {
+  "file": "gruppenmitglieder.ps1",
+  "cat": "Gruppen & Teams",
+  "name": "Gruppenmitglieder exportieren",
+  "desc": "Gruppe wählen, Mitglieder als Tabelle (Export nach Excel im Fenster)"
+ },
+ {
+  "file": "team-mitglied.ps1",
+  "cat": "Gruppen & Teams",
+  "name": "Teams: Mitglied hinzufügen",
+  "desc": "Team wählen und Benutzer hinzufügen"
+ },
+ {
+  "file": "sharepoint-websites.ps1",
+  "cat": "SharePoint",
+  "name": "SharePoint-Websites",
+  "desc": "Alle Websites mit Speicher und letzter Änderung"
+ },
+ {
+  "file": "intune-geraete.ps1",
+  "cat": "Geräte",
+  "name": "Intune-Geräte",
+  "desc": "Verwaltete Geräte mit Compliance und letzter Synchronisierung"
+ }
+]

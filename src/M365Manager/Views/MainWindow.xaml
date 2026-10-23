@@ -12,6 +12,29 @@
             <Border x:Name="TabBorder" Margin="0,0,4,0" Padding="10,0,4,0" Height="32" CornerRadius="6"
                     MinWidth="110" MaxWidth="230" Background="Transparent" Cursor="Hand" ToolTip="{Binding Url}"
                     MouseLeftButtonDown="Tab_MouseDown" MouseUp="Tab_MouseUp">
+                <Border.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Neu laden" Click="TabReload_Click">
+                            <MenuItem.Icon><ui:SymbolIcon Symbol="ArrowClockwise20" /></MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="Duplizieren" Click="TabDuplicate_Click">
+                            <MenuItem.Icon><ui:SymbolIcon Symbol="Copy20" /></MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="{Binding PinHeader}" Click="TabPin_Click"
+                                  ToolTip="Angeheftete Tabs bleiben links und öffnen sich beim nächsten Start dieses Profils wieder.">
+                            <MenuItem.Icon><ui:SymbolIcon Symbol="Pin20" /></MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="Adresse kopieren" Click="TabCopyUrl_Click">
+                            <MenuItem.Icon><ui:SymbolIcon Symbol="Link20" /></MenuItem.Icon>
+                        </MenuItem>
+                        <Separator />
+                        <MenuItem Header="Schließen" InputGestureText="Strg+W" Click="TabClose_Click">
+                            <MenuItem.Icon><ui:SymbolIcon Symbol="Dismiss20" /></MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="Andere Tabs schließen" Click="TabCloseOthers_Click" ToolTip="Angeheftete Tabs bleiben offen." />
+                        <MenuItem Header="Tabs rechts davon schließen" Click="TabCloseRight_Click" ToolTip="Angeheftete Tabs bleiben offen." />
+                    </ContextMenu>
+                </Border.ContextMenu>
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="16" />
@@ -22,9 +45,9 @@
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                     <Image x:Name="Favicon" Source="{Binding Icon}" Width="16" Height="16" VerticalAlignment="Center"
                            RenderOptions.BitmapScalingMode="HighQuality" />
-                    <TextBlock Grid.Column="1" Text="{Binding Title}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                    <TextBlock x:Name="TabTitle" Grid.Column="1" Text="{Binding Title}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
                                Margin="8,0,4,0" FontSize="12.5" />
-                    <Button Grid.Column="2" Style="{StaticResource GhostButton}" Click="TabClose_Click" ToolTip="Tab schließen (Strg+W)"
+                    <Button x:Name="TabCloseButton" Grid.Column="2" Style="{StaticResource GhostButton}" Click="TabClose_Click" ToolTip="Tab schließen (Strg+W)"
                             Width="22" Height="22" Padding="0">
                         <ui:SymbolIcon Symbol="Dismiss12" FontSize="11" />
                     </Button>
@@ -33,6 +56,13 @@
             <DataTemplate.Triggers>
                 <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
                     <Setter TargetName="Favicon" Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsPinned}" Value="True">
+                    <Setter TargetName="TabTitle" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="TabCloseButton" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="TabBorder" Property="MinWidth" Value="0" />
+                    <Setter TargetName="TabBorder" Property="Padding" Value="10,0,10,0" />
+                    <Setter TargetName="TabBorder" Property="ToolTip" Value="{Binding Title}" />
                 </DataTrigger>
                 <Trigger SourceName="TabBorder" Property="IsMouseOver" Value="True">
                     <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
@@ -138,6 +168,9 @@
                             <MenuItem Header="Datenordner öffnen" Click="OpenDataFolder_Click">
                                 <MenuItem.Icon><ui:SymbolIcon Symbol="FolderOpen20" /></MenuItem.Icon>
                             </MenuItem>
+                            <MenuItem Header="Nach App-Update suchen" Click="CheckUpdate_Click">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="ArrowDownload20" /></MenuItem.Icon>
+                            </MenuItem>
                         </ContextMenu>
                     </Button.ContextMenu>
                 </Button>
@@ -145,6 +178,13 @@
                 <!-- Unten -->
                 <StackPanel DockPanel.Dock="Bottom">
                     <Separator Margin="4,6,4,6" />
+                    <Button x:Name="UpdateNavButton" Style="{StaticResource NavButton}" Click="InstallUpdate_Click" Visibility="Collapsed">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="ArrowDownload20" FontSize="18" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                            <TextBlock x:Name="UpdateNavText" Text="Update verfügbar" Margin="12,0,0,0" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                        </StackPanel>
+                    </Button>
                     <Button x:Name="EditorNavButton" Style="{StaticResource NavButton}" Click="OpenEditor_Click"
                             ToolTip="Skripte schreiben und im Terminal ausführen (F5 / F8)">
                         <StackPanel Orientation="Horizontal">

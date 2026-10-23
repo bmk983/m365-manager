@@ -303,6 +303,7 @@ Describe 'Token-Anfrage an die App hängt nie' {
                         'heartbeat' { 1..2 | ForEach-Object { $w.WriteLine("res|$id|pending|"); Start-Sleep -Milliseconds 300 }; $w.WriteLine("res|$id|ok|TOKEN-OK|4102444800") }
                         'window' { $w.WriteLine("res|$id|pending|Anmeldefenster für Microsoft Graph ist geöffnet – bitte dort anmelden."); Start-Sleep -Milliseconds 300; $w.WriteLine("res|$id|ok|TOKEN-WIN|4102444800") }
                         'ok' { $w.WriteLine("res|$id|ok|TOKEN-RETRY|4102444800") }
+                        'grid' { $w.WriteLine("res|$id|pending|Tabellenfenster ist geöffnet"); $w.WriteLine("res|$id|ok|0,2") }
                     }
                     Start-Sleep -Milliseconds 200
                     $server.Dispose()
@@ -326,11 +327,43 @@ Describe 'Token-Anfrage an die App hängt nie' {
         ($out | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } | ForEach-Object { "$_" }) -join ' ' | Should -Match 'Anmeldefenster'
         ($out | Where-Object { $_.Token }).Token | Should -Be 'TOKEN-WIN'
     }
+    It 'Tabellenfenster: -PassThru gibt die ausgewählten Zeilen zurück' {
+        $null = Start-FakeApp $env:M365M_PIPE @('grid')
+        $picked = 'null', 'eins', 'zwei', 'drei' | ForEach-Object { [pscustomobject]@{ Name = $_ } } | Out-GridView -PassThru -Title 'Wahl' 6>$null
+        $picked.Name | Should -Be @('null', 'zwei')
+    }
     It 'stumme App: neu verbinden, erneut fragen, Token erhalten (statt endlos zu hängen)' {
         $null = Start-FakeApp $env:M365M_PIPE @('silent', 'ok')
         $sw = [Diagnostics.Stopwatch]::StartNew()
         (Get-M365Token Graph).Token | Should -Be 'TOKEN-RETRY'
         $sw.Elapsed.TotalSeconds | Should -BeLessThan 60
+    }
+}
+
+Describe 'Tabellenfenster (Out-GridView)' {
+    It 'bereitet Objekte auf: leere Spalten weg, Datum lesbar, Zahlen bleiben Zahlen, Listen als Text' {
+        $items = [System.Collections.Generic.List[object]]::new()
+        $items.Add([pscustomobject]@{ DisplayName = 'Anna'; Size = 12; Leer = $null; Created = [datetime]'2026-01-02 03:04:05'; Aliases = @('a', 'b') })
+        $items.Add([pscustomobject]@{ DisplayName = 'Ben'; Size = 3; Leer = ''; Created = $null; Aliases = @() })
+        $d = ConvertTo-M365GridData $items 'Test' | ConvertFrom-Json
+        $d.title | Should -Be 'Test'
+        $d.columns | Should -Be @('DisplayName', 'Size', 'Created', 'Aliases')
+        $d.rows[0][1] | Should -Be 12
+        $d.rows[0][1] | Should -BeOfType [long]
+        $d.rows[0][2] | Should -Be '2026-01-02 03:04:05'
+        $d.rows[0][3] | Should -Be 'a, b'
+        $d.rows[1][2] | Should -Be ''
+    }
+    It 'einfache Werte landen in einer Spalte "Wert"' {
+        $items = [System.Collections.Generic.List[object]]::new(); 'x', 'y' | ForEach-Object { $items.Add($_) }
+        $d = ConvertTo-M365GridData $items 'T' | ConvertFrom-Json
+        $d.columns | Should -Be @('Wert')
+        $d.rows.Count | Should -Be 2
+        $d.rows[1][0] | Should -Be 'y'
+    }
+    It 'ohne App: Tabelle im Terminal, -PassThru gibt alles zurück' {
+        $pipe = $env:M365M_PIPE; $env:M365M_PIPE = $null
+        try { (1, 2, 3 | Out-GridView -PassThru 6>$null).Count | Should -Be 3 } finally { $env:M365M_PIPE = $pipe }
     }
 }
 

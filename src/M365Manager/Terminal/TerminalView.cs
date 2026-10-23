@@ -38,6 +38,8 @@ public sealed class TerminalView : Grid, IDisposable
 
     /// <summary>Liefert Tokens aus der Browser-Sitzung des Profils (Dienst, zusätzliche Scopes).</summary>
     public Func<string, string?, bool, bool, Action<string>, Task<TokenResult>>? TokenProvider { get; set; }
+    /// <summary>Out-GridView: Daten (JSON), Modus (none/wait/single/multiple) -> ausgewählte Zeilen (kommagetrennte Indizes).</summary>
+    public Func<string, string, Task<string>>? GridProvider { get; set; }
 
     public TerminalView(Func<AdminProfile> profile, int number, bool dark)
     {
@@ -278,6 +280,14 @@ public sealed class TerminalView : Grid, IDisposable
     /// <summary>Anfrage aus PowerShell, z. B. "token" + Dienst. Antwort: Token|Ablauf (Unix-Sekunden).</summary>
     private async Task<string> HandleRequestAsync(string kind, string[] args, Action<string> notify)
     {
+        if (kind == "grid" && args.Length >= 2)
+        {
+            var grid = GridProvider ?? throw new InvalidOperationException("Kein Tabellenfenster verfügbar.");
+            var json = Encoding.UTF8.GetString(Convert.FromBase64String(args[1]));
+            notify(args[0] == "wait" ? "Tabellenfenster ist geöffnet – das Terminal wartet, bis es geschlossen wird."
+                                     : "Tabellenfenster ist geöffnet – Zeilen auswählen und mit „OK“ übernehmen.");
+            return await Dispatcher.InvokeAsync(() => grid(json, args[0])).Task.Unwrap();
+        }
         if (kind != "token" || args.Length == 0) throw new InvalidOperationException("Unbekannte Anfrage.");
         var provider = TokenProvider ?? throw new InvalidOperationException("Keine Token-Quelle.");
         var extra = args.Length > 1 && args[1].Length > 0 ? args[1] : null;
@@ -302,6 +312,10 @@ public sealed class TerminalView : Grid, IDisposable
                 break;
             case "set":
                 ProfileValueReported?.Invoke(parts[1], parts[2]);
+                break;
+            case "grid":
+                try { _ = GridProvider?.Invoke(Encoding.UTF8.GetString(Convert.FromBase64String(parts[2])), "none"); }
+                catch (Exception ex) { Log.Write("Tabellenfenster: " + ex.Message); }
                 break;
             case "log":
                 // Diagnosezeilen aus der Sitzung (z. B. Graph-Fehler mit request-id) – enthalten keine Tokens

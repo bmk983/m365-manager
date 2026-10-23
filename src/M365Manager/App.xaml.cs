@@ -36,6 +36,7 @@ public partial class App : Application
             args.SetObserved();
         };
         Log.Write("Start · Version " + typeof(App).Assembly.GetName().Version + " · Daten: " + AppPaths.DataRoot);
+        UpdateService.FinishPendingUpdate(e.Args);   // nach einem Update: alte Instanz erst beenden lassen
 
         if (!AcquireSingleInstance(e.Args))
         {
@@ -181,6 +182,61 @@ public partial class App : Application
         if (!ProfileWindows.Any(w => !ReferenceEquals(w, closed)))
             ShowLauncher();
     }
+
+    /// <summary>Update nach Rückfrage installieren (lädt, prüft, tauscht die EXE und startet neu).</summary>
+    public static async Task InstallUpdateAsync(UpdateService.UpdateInfo info)
+    {
+        var confirm = await new Wpf.Ui.Controls.MessageBox
+        {
+            Title = "Auf Version " + info.Version.ToString(3) + " aktualisieren?",
+            Content = "M365 Manager lädt die neue Version von GitHub, prüft ihre Prüfsumme und startet neu.\n\n" +
+                      "Dabei werden alle Profilfenster und Terminals geschlossen – laufende Befehle werden abgebrochen. " +
+                      "Offene Skripte im Editor bleiben erhalten, Profile und Anmeldungen auch.",
+            PrimaryButtonText = "Jetzt aktualisieren",
+            CloseButtonText = "Später",
+        }.ShowDialogAsync();
+        if (confirm != Wpf.Ui.Controls.MessageBoxResult.Primary) return;
+
+        var text = new System.Windows.Controls.TextBlock { Text = "Bereite Update vor …", Margin = new Thickness(0, 14, 0, 0), HorizontalAlignment = HorizontalAlignment.Center };
+        var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(32, 24, 32, 28) };
+        panel.Children.Add(new ProgressRing { IsIndeterminate = true, Width = 40, Height = 40 });
+        panel.Children.Add(text);
+        var root = new System.Windows.Controls.StackPanel();
+        root.Children.Add(new TitleBar { Title = "Update", ShowMinimize = false, ShowMaximize = false, ShowClose = false });
+        root.Children.Add(panel);
+        var window = new FluentWindow
+        {
+            Title = "M365 Manager – Update",
+            Content = root,
+            SizeToContent = SizeToContent.WidthAndHeight,
+            MinWidth = 360,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            ExtendsContentIntoTitleBar = true,
+            WindowBackdropType = WindowBackdropType.Mica,
+            Topmost = true,
+        };
+        window.Show();
+        try
+        {
+            // Das zuletzt benutzte offene Profil nach dem Neustart direkt wieder öffnen
+            var reopen = ProfileWindows.Select(w => w.ProfileId).FirstOrDefault();
+            await UpdateService.InstallAsync(info, new Progress<string>(t => text.Text = t), reopen is null ? null : "--profile " + reopen);
+        }
+        catch (Exception ex)
+        {
+            window.Close();
+            Log.Write("Update fehlgeschlagen: " + ex);
+            await new Wpf.Ui.Controls.MessageBox
+            {
+                Title = "Update nicht möglich",
+                Content = ex.Message + "\n\nAlternative: App schließen und in PowerShell ausführen:\n" + InstallCommand,
+                CloseButtonText = "OK",
+            }.ShowDialogAsync();
+        }
+    }
+
+    public const string InstallCommand = "irm https://raw.githubusercontent.com/bmk983/m365-manager/main/install.ps1 | iex";
 
     private void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
