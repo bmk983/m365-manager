@@ -394,6 +394,8 @@ Describe 'Preflight vor privilegierten Cmdlets' {
         Mock Get-M365TargetRoleIds { @('62e90394-69f5-4237-9190-012177145e10') }
         $global:M365.StrictPreflight = $true
         $out = $null
+        # Die Sperre meldet sich per Write-Error – hier als Abbruch auffangen
+        $ErrorActionPreference = 'Stop'
         $message = try { $out = Test-ProxyWrite -UserId 'ga@contoso.com'; '' } catch { $_.Exception.Message }
         $out | Should -BeNullOrEmpty                       # Original-Cmdlet wurde nicht aufgerufen
         $message | Should -Match 'Privileged Authentication Administrator'

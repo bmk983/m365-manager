@@ -20,6 +20,22 @@ $ExecutionContext.InvokeCommand.PreCommandLookupAction = $null
 $ExecutionContext.InvokeCommand.CommandNotFoundAction = $null
 $global:M365.AutoConnect = $false
 
+# ------------------------------------------------------------------ Schutz der Entra-/Graph-Berechtigungen
+# 1. Keine Ersatz-Anmeldung über das Modul (WAM/Windows-Konto) – nur die Browser-Anmeldung des Profils.
+#    So kann sich hier nie ein anderes Konto anmelden und nirgends eine Zustimmung entstehen.
+function Connect-M365Classic([string]$Svc, [string[]]$Scopes) {
+    throw "Die Browser-Anmeldung des Profils konnte für $Svc nicht übernommen werden. Der RBAC-Bereich meldet sich bewusst nicht anders an – bitte im Terminal 'Connect-M365 $Svc' prüfen."
+}
+# 2. Graph wird nur mit den Profil-Berechtigungen und nur lesend verwendet. Änderungen in Entra laufen über das Entra-Portal.
+$script:GraphGuard = '(?i)(\b(Connect-MgGraph|Connect-M365|Request-M365GraphScope|Invoke-M365Graph\w*)\b|\b(' +
+    (@(Get-Verb | ForEach-Object Verb) -join '|') + ')-Mg[A-Za-z]\w*|graph\.microsoft\.com|\s-Scopes\b)'
+function Test-RbacGraphGuard([string]$Script) {
+    $m = [regex]::Match($Script, $script:GraphGuard)
+    if ($m.Success) {
+        throw "Im RBAC-Bereich werden keine Microsoft-Graph-/Entra-Befehle ausgeführt (gefunden: '$($m.Value.Trim())'). Der Bereich ändert nur Exchange – Entra-Berechtigungen bitte im Entra-Portal ändern."
+    }
+}
+
 function Send-RbacReply([hashtable]$Reply) {
     $json = ConvertTo-Json $Reply -Depth 8 -Compress
     $script:Out.WriteLine($script:Marker + $json)
@@ -272,8 +288,8 @@ $script:Ops.testApp = {
 
 $script:Ops.run = {
     param($a, $script)
+    Test-RbacGraphGuard $script
     Use-RbacService Exchange
-    if ($script -match '-Mg|Mg[A-Z]\w+\b|Connect-M365 Graph') { Use-RbacService Graph }
     $sb = [scriptblock]::Create($script)
     # Beim ersten Fehler anhalten (keine Folgebefehle auf halbem Stand) – die Ausgabe bis dahin trotzdem zurückgeben
     $lines = [System.Collections.Generic.List[object]]::new()

@@ -182,6 +182,15 @@ public sealed class RbacHost : IDisposable
     {
         if (kind != "token" || args.Length == 0) throw new InvalidOperationException("Unbekannte Anfrage.");
         var extra = args.Length > 1 && args[1].Length > 0 ? args[1] : null;
+        // Schutz: Der RBAC-Bereich nutzt Graph nur mit den Profil-Berechtigungen. Zusätzliche Scopes würden eine
+        // Zustimmung (Consent) in Entra auslösen – das darf von hier aus nie passieren.
+        if (args[0] == "Graph" && !string.IsNullOrWhiteSpace(extra))
+        {
+            Log.Write("RBAC: Anfrage nach zusätzlichen Graph-Berechtigungen abgelehnt (" + extra + ")");
+            throw new InvalidOperationException("Der RBAC-Bereich fordert keine zusätzlichen Graph-Berechtigungen an.");
+        }
+        if (args[0] is not ("Graph" or "Exchange"))
+            throw new InvalidOperationException("Der RBAC-Bereich verbindet sich nur mit Exchange Online und (lesend) mit Graph.");
         var flags = args.Length > 2 ? args[2].Split(',') : [];
         void Forward(string text)
         {

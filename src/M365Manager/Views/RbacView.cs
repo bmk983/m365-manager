@@ -23,6 +23,9 @@ public sealed class RbacView : Grid, IDisposable
     /// <summary>Befehl in den Skript-Editor übernehmen (Name, Code).</summary>
     public Action<string, string>? OpenInEditor { get; set; }
 
+    /// <summary>Adresse im Entra-Portal in einem Browser-Tab des Profils öffnen.</summary>
+    public Action<string>? OpenPortal { get; set; }
+
     public RbacView(RbacHost host, bool dark)
     {
         _host = host;
@@ -124,6 +127,12 @@ public sealed class RbacView : Grid, IDisposable
 
             case "toeditor":
                 OpenInEditor?.Invoke(Str("name") ?? "RBAC", Str("code") ?? "");
+                break;
+
+            case "portal":
+                // Nur Entra-Portal-Adressen – Änderungen in Entra macht der Nutzer dort mit seiner Portal-Anmeldung
+                if (Str("url") is { } url && url.StartsWith("https://entra.microsoft.com/", StringComparison.OrdinalIgnoreCase))
+                    OpenPortal?.Invoke(url);
                 break;
 
             case "export":

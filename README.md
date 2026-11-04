@@ -107,7 +107,7 @@ In der Seitenleiste unter **Exchange-RBAC** öffnet sich eine Oberfläche für d
   3. Postfächer festlegen: Gruppe, vorhandener Bereich oder Verwaltungseinheit, mit Vorschau der enthaltenen Postfächer.
   4. Befehle prüfen und ausführen (`New-ServicePrincipal`, `New-ManagementScope`, `New-ManagementRoleAssignment`).
   5. Mit `Test-ServicePrincipalAuthorization` testen.
-  6. Die **tenantweiten Entra-Rechte entfernen**. Erst dann wirkt die Einschränkung, weil sich Entra-Rechte und RBAC addieren.
+  6. Die **tenantweiten Entra-Rechte entfernen**, im Entra-Portal (der Assistent öffnet die richtige Seite) und nicht per PowerShell. Erst dann wirkt die Einschränkung, weil sich Entra-Rechte und RBAC addieren.
 - **Rollengruppen:** Mitglieder anzeigen, hinzufügen und entfernen, neue Rollengruppe mit Rollen und Bereich.
 - **Rollen:** alle Rollen mit ihren Cmdlets. **Eigene Rolle** von einer Standardrolle ableiten und Cmdlets abwählen, z. B. „nur lesen“.
 - **Zuweisungen:** alle Rollenzuweisungen, auch die direkten an Benutzer und Apps, die das Exchange Admin Center nicht zeigt. Aktivieren, deaktivieren, entfernen.
@@ -115,6 +115,12 @@ In der Seitenleiste unter **Exchange-RBAC** öffnet sich eine Oberfläche für d
 - **Nachschlagen:** Welche Rechte hat ein Konto, direkt und über Rollengruppen? Welche Rolle erlaubt ein Cmdlet?
 
 **Jede Änderung zeigt vorher den PowerShell-Befehl.** Du kannst ihn anpassen, kopieren oder in den Skript-Editor übernehmen. Ausgeführt wird genau der angezeigte Text, und im Protokoll steht, was ausgeführt wurde. Nötig ist mindestens die Rolle *View-Only Organization Management*, für Änderungen *Organization Management*. Zum Entfernen von Entra-Rechten braucht es zusätzlich *Cloudanwendungsadministrator*.
+
+**Schutz der Entra-/Graph-Berechtigungen:** Der RBAC-Bereich ändert in Entra nichts und kann deine Graph-Berechtigungen nicht verändern.
+- Graph wird nur lesend und nur mit den Berechtigungen des Profils verwendet. Zusätzliche Graph-Berechtigungen fordert der Bereich nie an, also entsteht keine Zustimmung (Consent) und kein Zustimmungsfenster. Die App lehnt solche Anfragen ab.
+- Angemeldet wird ausschließlich über die Browser-Anmeldung des Profils. Klappt die nicht, gibt es eine Fehlermeldung statt einer Ersatz-Anmeldung über das Windows-Konto.
+- Graph- und Entra-Befehle (`*-Mg*`, `Connect-MgGraph`, `Connect-M365` …) werden im RBAC-Bereich nicht ausgeführt, auch nicht, wenn man sie in die Befehlsvorschau tippt.
+- Terminal, Portale und Skript-Editor bleiben unberührt. Der Bereich läuft in einer eigenen, unsichtbaren PowerShell.
 
 ## Tastenkürzel
 

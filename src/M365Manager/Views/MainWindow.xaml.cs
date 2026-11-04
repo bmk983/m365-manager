@@ -772,6 +772,7 @@ public partial class MainWindow : FluentWindow
                     var file = string.Concat(name.Split(Path.GetInvalidFileNameChars())).Trim();
                     _editor!.OpenNewScript((file.Length > 0 ? file : "RBAC") + ".ps1", code);
                 },
+                OpenPortal = url => _ = CreateTabAsync(url, null),
             };
             RbacArea.Children.Add(_rbac);
             RbacTab.Visibility = Visibility.Visible;

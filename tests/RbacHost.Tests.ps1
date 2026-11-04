@@ -38,13 +38,20 @@ function Never-Thing { 'darf nicht laufen' }
         '{"id":2,"op":"appRoles","args":{}}'
         '{"id":3,"op":"gibtsnicht","args":{}}'
         '{"id":4,"op":"run","script":"New-Thing\nFail-Thing\nNever-Thing"}'
+        '{"id":5,"op":"run","script":"New-Thing\nRemove-MgServicePrincipalAppRoleAssignment -ServicePrincipalId x -AppRoleAssignmentId y"}'
+        '{"id":6,"op":"run","script":"Connect-M365 Graph -Scopes AppRoleAssignment.ReadWrite.All"}'
+        '{"id":7,"op":"run","script":"Invoke-MgGraphRequest DELETE v1.0/servicePrincipals/x"}'
+        '{"id":8,"op":"run","script":"New-Thing -Name Firma-MgmtGruppe"}'
     )
+    $script:RbacSource = Get-Content (Join-Path $PSScriptRoot '..\src\M365Manager\Assets\ps\rbac-host.ps1') -Raw
+    $script:RbacJs = Get-Content (Join-Path $PSScriptRoot '..\src\M365Manager\Assets\rbac\rbac.js') -Raw
+    $script:RbacCs = Get-Content (Join-Path $PSScriptRoot '..\src\M365Manager\Services\RbacHost.cs') -Raw
 }
 AfterAll { Remove-Item $script:Work -Recurse -Force -ErrorAction SilentlyContinue }
 
 Describe 'RBAC-Hintergrund-PowerShell' {
     It 'beantwortet jede Anfrage genau einmal' {
-        $script:Replies.Count | Should -Be 4
+        $script:Replies.Count | Should -Be 8
     }
     It 'liefert auch eine einzelne Zeile als Liste' {
         $script:Replies[0] | Should -Match '"data":\[\{'
@@ -63,5 +70,31 @@ Describe 'RBAC-Hintergrund-PowerShell' {
         $out | Should -Match 'erster Befehl ok'
         $out | Should -Match 'FEHLER: Exchange sagt nein'
         $out | Should -Not -Match 'darf nicht laufen'
+    }
+}
+
+Describe 'Schutz der Entra-/Graph-Berechtigungen im RBAC-Bereich' {
+    It 'führt keine Graph-Befehle aus – auch nicht den Teil davor' {
+        foreach ($i in 4, 5, 6) {
+            $r = $script:Replies[$i] | ConvertFrom-Json
+            $r.ok | Should -BeFalse
+            $r.error | Should -Match 'keine Microsoft-Graph-/Entra-Befehle'
+            "$($r.data)" | Should -Not -Match 'erster Befehl ok'
+        }
+    }
+    It 'blockiert normale Exchange-Befehle nicht (auch nicht mit "-Mg" im Namen)' {
+        $r = $script:Replies[7] | ConvertFrom-Json
+        $r.ok | Should -BeTrue
+        $r.data.output | Should -Match 'erster Befehl ok'
+    }
+    It 'hat keine Ersatz-Anmeldung über das Modul (WAM/Windows-Konto)' {
+        $script:RbacSource | Should -Match 'function Connect-M365Classic[^{]*\{\s*throw'
+    }
+    It 'fordert in der Oberfläche keine zusätzlichen Graph-Scopes an und entfernt Entra-Rechte nur über das Portal' {
+        $script:RbacJs | Should -Not -Match 'Connect-M365|-Scopes|Remove-Mg|AppRoleAssignment\.ReadWrite'
+        $script:RbacJs | Should -Match "t: 'portal'"
+    }
+    It 'lehnt Token-Anfragen mit zusätzlichen Graph-Scopes auf App-Seite ab' {
+        $script:RbacCs | Should -Match 'args\[0\] == "Graph" && !string\.IsNullOrWhiteSpace\(extra\)'
     }
 }

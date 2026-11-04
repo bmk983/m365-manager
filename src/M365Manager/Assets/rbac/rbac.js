@@ -488,19 +488,50 @@
     openModal('Zugriff testen: ' + a.displayName, testPanel(a), [el('button', { class: 'primary', onclick: closeModal }, 'Schließen')]);
   }
 
-  async function removeGrants(a, after) {
-    const lines = ['# Tenantweite Anwendungsberechtigungen von „' + a.displayName + '“ in Entra entfernen',
-      '# Benötigt die Rolle Cloudanwendungsadministrator (oder höher) und die Graph-Berechtigung AppRoleAssignment.ReadWrite.All',
-      'Connect-M365 Graph -Scopes AppRoleAssignment.ReadWrite.All -Force -Fresh -Quiet'];
-    for (const g of a.grants) lines.push('Remove-MgServicePrincipalAppRoleAssignment -ServicePrincipalId ' + q(a.objectId) + ' -AppRoleAssignmentId ' + q(g.assignmentId) + '   # ' + g.permission + ' (' + g.resource + ')');
-    const ok = await preview('Tenantweite Rechte entfernen: ' + a.displayName, lines.join('\n'), {
-      danger: true, okText: 'Entfernen',
-      explain: '<b>Danach greift nur noch RBAC:</b> Die App erreicht dann nur noch die Postfächer ihrer Bereiche. ' +
-        'Bis Exchange die RBAC-Zuweisungen übernommen hat (bis zu 2 Stunden), kann die App kurz gar keinen Zugriff haben – am besten außerhalb der Arbeitszeit. ' +
-        'Rückgängig: in Entra unter Unternehmensanwendungen → ' + esc(a.displayName) + ' → Berechtigungen die Administratorzustimmung erneut erteilen.',
-    });
-    if (ok) invalidate('apps');
-    if (after) after(ok); else if (ok) viewApps(true);
+  /**
+   * Tenantweite Entra-Rechte entfernen – bewusst NICHT per PowerShell, sondern im Entra-Portal mit der Portal-Anmeldung.
+   * Der RBAC-Bereich fordert dadurch nie zusätzliche Graph-Berechtigungen an und ändert in Entra selbst nichts.
+   */
+  function removeGrants(a, after) {
+    const url = 'https://entra.microsoft.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Permissions/objectId/' +
+      encodeURIComponent(a.objectId) + '/appId/' + encodeURIComponent(a.appId);
+    const grantList = grants => el('ul', { class: 'list' }, grants.map(g => el('li', {}, badge(g.permission, 'bad'), el('span', { class: 'grow muted' }, g.resource))));
+    const status = el('div');
+    let removed = false;
+    const finish = () => { closeModal(); if (removed) invalidate('apps'); if (after) after(removed); else if (removed) viewApps(true); };
+    const check = el('button', { class: 'outline' }, 'Erneut prüfen');
+    const done = el('button', { class: 'primary', onclick: finish }, 'Schließen');
+    check.onclick = async () => {
+      check.disabled = true;
+      status.replaceChildren(el('div', { class: 'note' }, 'Prüfe die Entra-Rechte …'));
+      try {
+        invalidate('apps');
+        const fresh = (await load('apps', 'apps', 'Prüfe Entra-Rechte …', true)).find(x => x.appId === a.appId);
+        const left = fresh ? (fresh.grants || []) : [];
+        if (!left.length) {
+          removed = true;
+          a.grants = [];
+          status.replaceChildren(el('div', { class: 'note ok' }, '✓ Keine tenantweiten Postfach-Rechte mehr. Die App erreicht jetzt nur noch die Postfächer ihrer RBAC-Bereiche (wirksam nach bis zu 2 Stunden).'));
+        } else {
+          status.replaceChildren(el('div', { class: 'note warn' }, 'Noch in Entra erteilt:'), grantList(left));
+        }
+      } catch (e) {
+        status.replaceChildren(el('div', { class: 'note bad' }, 'Prüfen fehlgeschlagen: ' + e.message));
+      }
+      check.disabled = false;
+    };
+    openModal('Tenantweite Rechte entfernen: ' + a.displayName, el('div', {},
+      el('div', { class: 'note' }, el('b', {}, 'Im Entra-Portal, nicht per PowerShell. '),
+        'So fordert die App keine zusätzlichen Graph-Berechtigungen an und ändert in Entra nichts selbst. Du entfernst die Rechte mit deiner Portal-Anmeldung, nötig ist dafür die Rolle Cloudanwendungsadministrator.'),
+      el('ol', { style: 'padding-left:20px;line-height:1.8;margin:12px 0' },
+        el('li', {}, el('button', { class: 'small primary', onclick: () => { post({ t: 'portal', url }); toast('Entra-Portal im Browser-Tab geöffnet'); } }, 'Im Entra-Portal öffnen'),
+          ' Unternehmensanwendungen → ' + a.displayName + ' → Berechtigungen.'),
+        el('li', {}, 'Reiter „Administratorzustimmung“: bei jeder dieser Berechtigungen „…“ → „Berechtigung widerrufen“:', grantList(a.grants || [])),
+        el('li', {}, 'Andere Berechtigungen der App nicht anfassen. Danach über den Tab „Exchange-RBAC“ hierher zurückkehren und „Erneut prüfen“ wählen.')),
+      el('div', { class: 'note warn', html: '<b>Danach greift nur noch RBAC.</b> Bis Exchange die RBAC-Zuweisungen übernommen hat (bis zu 2 Stunden), kann die App kurz gar keinen Zugriff haben, am besten also außerhalb der Arbeitszeit. ' +
+        'Rückgängig: an derselben Stelle im Entra-Portal „Administratorzustimmung erteilen“.' }),
+      status),
+      [el('span', { class: 'grow' }), check, done]);
   }
 
   // ================================================================ Rollengruppen
