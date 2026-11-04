@@ -637,6 +637,7 @@
         case 'opened': openFile(m.path, m.name, m.content); break;
         case 'focus': editor.focus(); break;
         case 'hint': hint(m.text); break;
+        case 'newtab': createTab({ name: m.name, content: m.content }); hint('Aus dem RBAC-Bereich übernommen'); break;
       }
     });
     post({ t: 'ready' });

@@ -192,6 +192,13 @@
                             <TextBlock Text="Skript-Editor" Margin="12,0,0,0" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
+                    <Button x:Name="RbacNavButton" Style="{StaticResource NavButton}" Click="OpenRbac_Click"
+                            ToolTip="Exchange-RBAC: Rollen, Rollengruppen, Bereiche und Apps auf bestimmte Postfächer einschränken">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="ShieldKeyhole20" FontSize="18" />
+                            <TextBlock Text="Exchange-RBAC" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                     <Button Style="{StaticResource NavButton}" Click="ToggleTerminal_Click" ToolTip="Terminal ein-/ausblenden (Strg+Ö)">
                         <StackPanel Orientation="Horizontal">
                             <ui:SymbolIcon Symbol="WindowConsole20" FontSize="18" />
@@ -244,6 +251,15 @@
                                             <TextBlock Text="Skripte" FontSize="12.5" Margin="8,0,0,0" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </Border>
+                                    <Border x:Name="RbacTab" Margin="0,0,4,0" Padding="10,0,12,0" Height="32" CornerRadius="6" Cursor="Hand"
+                                            Background="Transparent" Visibility="Collapsed" MouseLeftButtonDown="RbacTab_MouseDown"
+                                            ToolTip="Exchange-RBAC">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:SymbolIcon Symbol="ShieldKeyhole20" FontSize="15" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                            <TextBlock Text="RBAC" FontSize="12.5" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Border>
                                     <Rectangle x:Name="EditorTabSeparator" Width="1" Height="18" Margin="2,0,6,0" VerticalAlignment="Center"
                                                Fill="{DynamicResource DividerStrokeColorDefaultBrush}" Visibility="Collapsed" />
                                     <ItemsControl x:Name="BrowserTabs" ItemTemplate="{StaticResource BrowserTabTemplate}">
@@ -285,6 +301,7 @@
 
                         <Grid x:Name="BrowserHost" Grid.Row="3" Margin="1,2,1,1" />
                         <Grid x:Name="EditorHost" Grid.Row="1" Grid.RowSpan="3" Margin="1,2,1,1" Visibility="Collapsed" />
+                        <Grid x:Name="RbacArea" Grid.Row="1" Grid.RowSpan="3" Margin="1,2,1,1" Visibility="Collapsed" />
 
                         <StackPanel x:Name="BrowserEmpty" Grid.Row="3" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed">
                             <ui:SymbolIcon Symbol="Globe24" FontSize="44" HorizontalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />

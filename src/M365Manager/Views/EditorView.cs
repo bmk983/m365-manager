@@ -17,7 +17,8 @@ public sealed class EditorView : Grid, IDisposable
 
     private readonly WebView2 _web;
     private readonly string _profileId;
-    private bool _dark, _initialized, _disposed;
+    private bool _dark, _initialized, _disposed, _ready;
+    private readonly List<string> _pendingNewTabs = [];
 
     /// <summary>Ausführen: Modus ("all"/"selection"), Code, Pfad (nur bei gespeicherter, unveränderter Datei), Name.</summary>
     public Action<string, string, string?, string>? RunRequested { get; set; }
@@ -97,6 +98,9 @@ public sealed class EditorView : Grid, IDisposable
         {
             case "ready":
                 Post(new { t = "init", profileId = _profileId, theme = _dark ? "dark" : "light" });
+                _ready = true;
+                foreach (var pending in _pendingNewTabs) PostRaw(pending);
+                _pendingNewTabs.Clear();
                 CompletionService.WarmUp();
                 break;
 
@@ -288,6 +292,13 @@ public sealed class EditorView : Grid, IDisposable
     }
 
     public void ShowHint(string text) => Post(new { t = "hint", text });
+
+    /// <summary>Neues Skript mit vorgegebenem Inhalt öffnen (wartet, bis der Editor bereit ist).</summary>
+    public void OpenNewScript(string name, string content)
+    {
+        var json = JsonSerializer.Serialize(new { t = "newtab", name, content });
+        if (_ready) PostRaw(json); else _pendingNewTabs.Add(json);
+    }
 
     public void FocusEditor()
     {

@@ -14,6 +14,7 @@ public static class AppPaths
     public static string TerminalAssetsDir => Path.Combine(AppDir, "terminal");
     public static string ScriptsDir => Path.Combine(AppDir, "ps");
     public static string EditorAssetsDir => Path.Combine(AppDir, "editor");
+    public static string RbacAssetsDir => Path.Combine(AppDir, "rbac");
     /// <summary>Gemeinsamer Ordner für eigene Skripte aller Profile.</summary>
     public static string UserScriptsDir => Path.Combine(DataRoot, "scripts");
     /// <summary>Temporäre Dateien für F5/F8 aus dem Editor.</summary>

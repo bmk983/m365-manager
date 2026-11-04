@@ -37,6 +37,7 @@
     <EmbeddedResource Include="Assets\terminal\**\*" LogicalName="assets/terminal/%(RecursiveDir)%(Filename)%(Extension)" />
     <EmbeddedResource Include="Assets\ps\**\*" LogicalName="assets/ps/%(RecursiveDir)%(Filename)%(Extension)" />
     <EmbeddedResource Include="Assets\editor\**\*" LogicalName="assets/editor/%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Assets\rbac\**\*" LogicalName="assets/rbac/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

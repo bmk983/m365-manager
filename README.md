@@ -96,6 +96,26 @@ In der Seitenleiste unter **Skript-Editor** öffnet sich ein Editor wie in VS Co
 
 Hinweis: Exchange- und Purview-Cmdlets (z. B. `Get-Mailbox`) erscheinen erst in den Vorschlägen, wenn sie im Terminal einmal verbunden wurden. Sie entstehen erst beim Verbinden.
 
+## Exchange-RBAC
+
+In der Seitenleiste unter **Exchange-RBAC** öffnet sich eine Oberfläche für die Exchange-Online-Berechtigungen, angelehnt an den [Exchange RBAC Manager](https://github.com/bastienperez/exchange-rbac-manager). Sie nutzt dieselbe Browser-Anmeldung wie das Terminal, in einer eigenen, unsichtbaren PowerShell.
+
+- **Anwendungen:** Apps mit Anwendungsrechten auf Postfächer (Mail.ReadWrite, Mail.Send, Calendars.ReadWrite …). Der Status zeigt, ob eine App **tenantweit** auf alle Postfächer zugreift oder per RBAC **eingeschränkt** ist.
+- **Assistent „App auf Postfächer einschränken“** (RBAC for Applications), z. B. für eine ERP-Software, die nur die Postfächer einer Schwesterfirma sehen darf:
+  1. App wählen.
+  2. Passende Exchange-Anwendungsrollen übernehmen.
+  3. Postfächer festlegen: Gruppe, vorhandener Bereich oder Verwaltungseinheit, mit Vorschau der enthaltenen Postfächer.
+  4. Befehle prüfen und ausführen (`New-ServicePrincipal`, `New-ManagementScope`, `New-ManagementRoleAssignment`).
+  5. Mit `Test-ServicePrincipalAuthorization` testen.
+  6. Die **tenantweiten Entra-Rechte entfernen**. Erst dann wirkt die Einschränkung, weil sich Entra-Rechte und RBAC addieren.
+- **Rollengruppen:** Mitglieder anzeigen, hinzufügen und entfernen, neue Rollengruppe mit Rollen und Bereich.
+- **Rollen:** alle Rollen mit ihren Cmdlets. **Eigene Rolle** von einer Standardrolle ableiten und Cmdlets abwählen, z. B. „nur lesen“.
+- **Zuweisungen:** alle Rollenzuweisungen, auch die direkten an Benutzer und Apps, die das Exchange Admin Center nicht zeigt. Aktivieren, deaktivieren, entfernen.
+- **Bereiche:** Management Scopes anlegen (z. B. „Mitglieder der Gruppe X“), Empfänger vorab anzeigen, sehen, wo ein Bereich verwendet wird.
+- **Nachschlagen:** Welche Rechte hat ein Konto, direkt und über Rollengruppen? Welche Rolle erlaubt ein Cmdlet?
+
+**Jede Änderung zeigt vorher den PowerShell-Befehl.** Du kannst ihn anpassen, kopieren oder in den Skript-Editor übernehmen. Ausgeführt wird genau der angezeigte Text, und im Protokoll steht, was ausgeführt wurde. Nötig ist mindestens die Rolle *View-Only Organization Management*, für Änderungen *Organization Management*. Zum Entfernen von Entra-Rechten braucht es zusätzlich *Cloudanwendungsadministrator*.
+
 ## Tastenkürzel
 
 | Kürzel                   | Aktion                                     |

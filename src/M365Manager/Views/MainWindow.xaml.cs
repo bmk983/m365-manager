@@ -43,7 +43,11 @@ public partial class MainWindow : FluentWindow
     private readonly TokenBroker _tokens;
     private string _profileIdentity = "";
     private EditorView? _editor;
-    private bool _editorActive;
+    private RbacView? _rbac;
+    private RbacHost? _rbacHost;
+    /// <summary>Aktiver Arbeitsbereich statt Browser: "editor", "rbac" oder null (Browser).</summary>
+    private string? _workspace;
+    private bool _editorActive => _workspace is not null;
 
     public string ProfileId => _profile.Id;
 
@@ -86,7 +90,7 @@ public partial class MainWindow : FluentWindow
 
     private void ApplyProfile()
     {
-        Title = (_editorActive ? "Skripte · " : "") + _profile.Name + " · M365 Manager";
+        Title = WindowTitle();
         AppTitleBar.Title = _profile.Name + " · M365 Manager";
         AvatarEllipse.Fill = _profile.ColorBrush;
         AvatarText.Text = _profile.Initials;
@@ -103,7 +107,7 @@ public partial class MainWindow : FluentWindow
             var identity = _profileIdentity;
             _profile = fresh;
             _profileIdentity = fresh.Upn + "|" + fresh.Tenant;
-            if (identity != _profileIdentity) _tokens.Clear();   // anderes Konto/Tenant: keine alten Tokens weiterverwenden
+            if (identity != _profileIdentity) { _tokens.Clear(); _rbacHost?.Reset(); }   // anderes Konto/Tenant: keine alten Tokens weiterverwenden
             ApplyProfile();
         }
     });
@@ -229,6 +233,7 @@ public partial class MainWindow : FluentWindow
                 CoreWebView2BrowsingDataKinds.ServiceWorkers |
                 CoreWebView2BrowsingDataKinds.DiskCache);
             _tokens.Clear();   // auch die Tokens fürs Terminal neu ausstellen lassen
+            _rbacHost?.Reset();
 
             foreach (var t in _tabs) t.View.CoreWebView2?.Reload();
             _activeTerminal?.View.SendCommand("Test-M365GraphToken", focus: false);
@@ -313,7 +318,8 @@ public partial class MainWindow : FluentWindow
     {
         foreach (var (key, button) in _portalButtons)
             button.Tag = !_editorActive && _activeTab?.PortalKey == key ? "active" : null;
-        EditorNavButton.Tag = _editorActive ? "active" : null;
+        EditorNavButton.Tag = _workspace == "editor" ? "active" : null;
+        RbacNavButton.Tag = _workspace == "rbac" ? "active" : null;
     }
 
     // ================================================================== Browser-Tabs
@@ -721,10 +727,17 @@ public partial class MainWindow : FluentWindow
         _editor.FocusEditor();
     }
 
-    private void SetEditorActive(bool active)
+    private void SetEditorActive(bool active) => SetWorkspace(active ? "editor" : null);
+
+    private string WindowTitle() =>
+        (_workspace == "editor" ? "Skripte · " : _workspace == "rbac" ? "Exchange-RBAC · " : "") + _profile.Name + " · M365 Manager";
+
+    private void SetWorkspace(string? workspace)
     {
-        _editorActive = active && _editor is not null;
-        EditorHost.Visibility = _editorActive ? Visibility.Visible : Visibility.Collapsed;
+        if ((workspace == "editor" && _editor is null) || (workspace == "rbac" && _rbac is null)) workspace = null;
+        _workspace = workspace;
+        EditorHost.Visibility = workspace == "editor" ? Visibility.Visible : Visibility.Collapsed;
+        RbacArea.Visibility = workspace == "rbac" ? Visibility.Visible : Visibility.Collapsed;
         NavBar.Visibility = _editorActive ? Visibility.Collapsed : Visibility.Visible;
         if (_editorActive) LoadingBar.Visibility = Visibility.Hidden;
         foreach (var t in _tabs)
@@ -733,10 +746,38 @@ public partial class MainWindow : FluentWindow
             t.View.Visibility = !_editorActive && t == _activeTab ? Visibility.Visible : Visibility.Collapsed;
         }
         if (!_editorActive && _activeTab is not null) _activeTab.IsSelected = true;
-        EditorTab.SetResourceReference(Border.BackgroundProperty, _editorActive ? "ControlFillColorDefaultBrush" : "SubtleFillColorTransparentBrush");
-        Title = (_editorActive ? "Skripte · " : "") + _profile.Name + " · M365 Manager";
+        EditorTab.SetResourceReference(Border.BackgroundProperty, workspace == "editor" ? "ControlFillColorDefaultBrush" : "SubtleFillColorTransparentBrush");
+        RbacTab.SetResourceReference(Border.BackgroundProperty, workspace == "rbac" ? "ControlFillColorDefaultBrush" : "SubtleFillColorTransparentBrush");
+        Title = WindowTitle();
         UpdatePortalHighlight();
         UpdateEmptyState();
+    }
+
+    // ================================================================== Exchange-RBAC
+
+    private void OpenRbac_Click(object sender, RoutedEventArgs e) => ShowRbac();
+
+    private void RbacTab_MouseDown(object sender, MouseButtonEventArgs e) => ShowRbac();
+
+    private void ShowRbac()
+    {
+        if (_rbac is null)
+        {
+            _rbacHost = new RbacHost(() => _profile, (service, extra, fresh, reauth, notify) => _tokens.GetAsync(service, extra, fresh, reauth, notify), Dispatcher);
+            _rbac = new RbacView(_rbacHost, App.IsDark)
+            {
+                OpenInEditor = (name, code) =>
+                {
+                    ShowEditor();
+                    var file = string.Concat(name.Split(Path.GetInvalidFileNameChars())).Trim();
+                    _editor!.OpenNewScript((file.Length > 0 ? file : "RBAC") + ".ps1", code);
+                },
+            };
+            RbacArea.Children.Add(_rbac);
+            RbacTab.Visibility = Visibility.Visible;
+            EditorTabSeparator.Visibility = Visibility.Visible;
+        }
+        SetWorkspace("rbac");
     }
 
     /// <summary>F5/F8 aus dem Editor: Code im aktiven Terminal ausführen (dot-sourced, wie in der ISE).</summary>
@@ -904,6 +945,7 @@ public partial class MainWindow : FluentWindow
     {
         foreach (var t in _terminalTabs) t.View.SetTheme(theme == ApplicationTheme.Dark);
         _editor?.SetTheme(theme == ApplicationTheme.Dark);
+        _rbac?.SetTheme(theme == ApplicationTheme.Dark);
     }
 
     // ================================================================== Layout
@@ -987,7 +1029,7 @@ public partial class MainWindow : FluentWindow
         }
 
         // Im Terminal gehören alle anderen Tasten der Shell (Strg+W, Strg+L …), im Editor dem Editor (F5, Strg+W …).
-        if (TerminalPane.IsKeyboardFocusWithin || EditorHost.IsKeyboardFocusWithin) return;
+        if (TerminalPane.IsKeyboardFocusWithin || EditorHost.IsKeyboardFocusWithin || RbacArea.IsKeyboardFocusWithin) return;
 
         if (mods == ModifierKeys.Control && key == Key.T)
         {
@@ -1031,6 +1073,8 @@ public partial class MainWindow : FluentWindow
         foreach (var t in _terminalTabs) t.View.Dispose();
         foreach (var t in _tabs) t.View.Dispose();
         _editor?.Dispose();
+        _rbac?.Dispose();
+        _rbacHost?.Dispose();
 
         base.OnClosed(e);
         App.OnProfileWindowClosed(this);

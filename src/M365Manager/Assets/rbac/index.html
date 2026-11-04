@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Exchange-RBAC</title>
+<link rel="stylesheet" href="rbac.css">
+</head>
+<body>
+<div id="app">
+  <nav id="nav">
+    <div class="brand">
+      <div class="title">Exchange-RBAC</div>
+      <div id="org" class="muted">nicht verbunden</div>
+    </div>
+    <button data-view="apps" class="active"><span class="ico">&#xE71D;</span>Anwendungen</button>
+    <button data-view="groups"><span class="ico">&#xE716;</span>Rollengruppen</button>
+    <button data-view="roles"><span class="ico">&#xEA18;</span>Rollen</button>
+    <button data-view="assignments"><span class="ico">&#xE71B;</span>Zuweisungen</button>
+    <button data-view="scopes"><span class="ico">&#xE8B7;</span>Bereiche</button>
+    <button data-view="lookup"><span class="ico">&#xE721;</span>Nachschlagen</button>
+    <div class="grow"></div>
+    <button id="btnReconnect" class="small" title="Neu verbinden, z. B. nach einer PIM-Aktivierung">↻ Neu verbinden</button>
+  </nav>
+  <main id="main"></main>
+</div>
+<div id="busy" hidden><div class="spinner"></div><div id="busyText">Lädt …</div></div>
+<div id="modal" hidden><div class="dialog" id="dialog"></div></div>
+<div id="toast" hidden></div>
+<script src="rbac.js"></script>
+</body>
+</html>
