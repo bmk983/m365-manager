@@ -196,11 +196,19 @@
   }
 
   // ================================================================ Anwendungen (RBAC for Applications)
+  // RBAC-Zuweisungen einer App: Postfachrollen ("Application …") vs. Exchange-Verwaltungsrollen (z. B. per Exchange.ManageAsApp)
+  const isMailboxRole = r => r.app ?? /^Application /.test(r.role);
+  const rbacKind = r => !isMailboxRole(r) ? 'warn' : r.scope ? 'ok' : 'bad';
+  const rbacLabel = r => (isMailboxRole(r) ? r.role.replace(/^Application /, '') : r.role) + ' · ' + (r.scope || 'ganze Organisation');
   const appStatus = a => {
-    const wide = (a.grants || []).length > 0, scoped = (a.rbac || []).length > 0;
-    if (wide && scoped) return ['gemischt', 'warn', 'Hat RBAC-Zuweisungen, aber zusätzlich noch tenantweite Entra-Rechte – damit gilt weiterhin der Zugriff auf ALLE Postfächer.'];
-    if (wide) return ['tenantweit', 'bad', 'Die App darf per Entra-Anwendungsberechtigung auf alle Postfächer zugreifen.'];
-    if (scoped) return ['eingeschränkt', 'ok', 'Nur per RBAC for Applications berechtigt – Zugriff nur innerhalb der zugewiesenen Bereiche.'];
+    const rbac = a.rbac || [];
+    const mbx = rbac.filter(isMailboxRole), admin = rbac.filter(r => !isMailboxRole(r));
+    const wide = (a.grants || []).length > 0, scoped = mbx.some(r => r.scope), orgMbx = mbx.some(r => !r.scope);
+    const adminHint = admin.length ? ' Zusätzlich Exchange-Verwaltungsrechte: ' + admin.map(rbacLabel).join(', ') + '.' : '';
+    if (wide && scoped) return ['gemischt', 'warn', 'Hat RBAC-Zuweisungen, aber zusätzlich noch tenantweite Entra-Rechte – damit gilt weiterhin der Zugriff auf ALLE Postfächer.' + adminHint];
+    if (wide || orgMbx) return ['tenantweit', 'bad', (wide ? 'Die App darf per Entra-Anwendungsberechtigung auf alle Postfächer zugreifen.' : 'Die App hat eine RBAC-Postfachrolle ohne Bereich – sie gilt für alle Postfächer der Organisation.') + adminHint];
+    if (scoped) return ['eingeschränkt', 'ok', 'Postfachzugriff nur per RBAC for Applications, nur innerhalb der zugewiesenen Bereiche.' + adminHint];
+    if (admin.length) return ['Exchange-Verwaltung', 'warn', 'Kein Postfachzugriff (keine Mail-/Kalender-Rechte), aber Exchange-Verwaltungsrechte für die App selbst: ' + admin.map(rbacLabel).join(', ') + '. „Ganze Organisation“ = für alle Empfänger im Tenant, nicht auf einen Bereich beschränkt.'];
     return ['ohne Postfachrechte', '', ''];
   };
 
@@ -212,7 +220,7 @@
       title: 'Anwendungen',
       sub: 'Apps mit Anwendungsberechtigungen auf Postfächer (z. B. Mail.ReadWrite, Mail.Send, Calendars.ReadWrite). ' +
         '<b>Tenantweit</b> = Zugriff auf alle Postfächer. Mit <b>RBAC for Applications</b> lässt sich das auf eine Gruppe von Postfächern beschränken.',
-      chips: [['all', 'Alle'], ['wide', 'Tenantweit'], ['mixed', 'Gemischt'], ['scoped', 'Eingeschränkt']], chip: s.chip,
+      chips: [['all', 'Alle'], ['wide', 'Tenantweit'], ['mixed', 'Gemischt'], ['scoped', 'Eingeschränkt'], ['admin', 'Exchange-Verwaltung']], chip: s.chip,
       onChip: k => { s.chip = k; viewApps(); }, search: s.search, onSearch: v => { s.search = v; refresh(); },
       buttons: [
         el('button', { class: 'primary', onclick: () => restrictWizard(null) }, '＋ App auf Postfächer einschränken …'),
@@ -221,14 +229,14 @@
     });
     const refresh = () => {
       const rows = apps.filter(a => matches(a, s.search, ['displayName', 'appId', r => (r.grants || []).map(g => g.permission).join(' ')]))
-        .filter(a => s.chip === 'all' || appStatus(a)[0] === ({ wide: 'tenantweit', mixed: 'gemischt', scoped: 'eingeschränkt' })[s.chip]);
+        .filter(a => s.chip === 'all' || appStatus(a)[0] === ({ wide: 'tenantweit', mixed: 'gemischt', scoped: 'eingeschränkt', admin: 'Exchange-Verwaltung' })[s.chip]);
       f.tableSlot.replaceChildren(table({
         rows, key: a => a.appId, empty: 'Keine Apps mit Postfach-Berechtigungen gefunden.',
         columns: [
           { title: 'Anwendung', key: 'displayName' },
           { title: 'Status', text: a => appStatus(a)[0], render: a => { const [t, k, tip] = appStatus(a); const b = badge(t, k); b.title = tip; return b; } },
           { title: 'Entra-Rechte (tenantweit)', text: a => (a.grants || []).map(g => g.permission).join(', '), render: a => (a.grants || []).map(g => badge(g.permission, 'bad')) },
-          { title: 'RBAC (eingeschränkt)', text: a => (a.rbac || []).map(r => r.role.replace(/^Application /, '')).join(', '), render: a => (a.rbac || []).map(r => badge(r.role.replace(/^Application /, '') + (r.scope ? ' · ' + r.scope : ''), 'ok')) },
+          { title: 'RBAC-Zuweisungen (Exchange)', text: a => (a.rbac || []).map(rbacLabel).join(', '), render: a => (a.rbac || []).map(r => { const b = badge(rbacLabel(r), rbacKind(r)); b.title = isMailboxRole(r) ? (r.scope ? 'Postfachzugriff nur im Bereich ' + r.scope : 'Postfachzugriff auf ALLE Postfächer') : 'Exchange-Verwaltungsrolle (kein Postfachzugriff)'; return b; }) },
           { title: 'App-ID', key: 'appId' },
         ],
         onSelect: a => appDetails(f.details, a),
@@ -247,7 +255,9 @@
       (a.grants || []).length ? el('ul', { class: 'list' }, a.grants.map(g => el('li', {}, badge(g.permission, 'bad'), el('span', { class: 'grow muted' }, g.resource))))
         : el('div', { class: 'muted' }, 'Keine – gut.'),
       el('h3', {}, 'RBAC-Zuweisungen (Exchange)'),
-      (a.rbac || []).length ? el('ul', { class: 'list' }, a.rbac.map(r => el('li', {}, el('span', { class: 'grow' }, r.role, el('div', { class: 'muted' }, r.scope ? 'Bereich: ' + r.scope : 'ganze Organisation')), r.enabled ? null : badge('deaktiviert', 'warn'),
+      (a.rbac || []).length ? el('ul', { class: 'list' }, a.rbac.map(r => el('li', {}, el('span', { class: 'grow' }, r.role,
+          el('div', { class: 'muted' }, (isMailboxRole(r) ? 'Postfachzugriff' : 'Verwaltungsrolle, kein Postfachzugriff') + ' · direkt der App zugewiesen · gilt für: ' + (r.scope ? 'Bereich „' + r.scope + '“' : 'ganze Organisation (kein Bereich)'))),
+          badge(isMailboxRole(r) ? (r.scope ? 'eingeschränkt' : 'alle Postfächer') : 'Verwaltung', rbacKind(r)), r.enabled ? null : badge('deaktiviert', 'warn'),
         el('button', { class: 'small danger', onclick: async () => { if (await preview('Zuweisung entfernen', 'Remove-ManagementRoleAssignment -Identity ' + q(r.name) + ' -Confirm:$false', { danger: true, okText: 'Entfernen' })) { invalidate('apps', 'assignments'); viewApps(true); } } }, 'Entfernen'))))
         : el('div', { class: 'muted' }, 'Keine.'),
       (a.policies || []).length ? [el('h3', {}, 'Alte Application Access Policies'),
@@ -255,9 +265,9 @@
         el('ul', { class: 'list' }, a.policies.map(p => el('li', {}, el('span', { class: 'grow' }, p.restriction + ' · ' + p.scope),
           el('button', { class: 'small danger', onclick: async () => { if (await preview('Application Access Policy entfernen', 'Remove-ApplicationAccessPolicy -Identity ' + q(p.identity) + ' -Confirm:$false', { danger: true, okText: 'Entfernen' })) viewApps(true); } }, 'Entfernen'))))] : null,
       el('div', { class: 'actions' },
-        el('button', { class: 'primary', onclick: () => restrictWizard(a) }, (a.rbac || []).length ? 'Einschränkung bearbeiten …' : 'Auf Postfächer einschränken …'),
+        el('button', { class: 'primary', onclick: () => restrictWizard(a) }, (a.rbac || []).some(isMailboxRole) ? 'Einschränkung bearbeiten …' : 'Auf Postfächer einschränken …'),
         el('button', { class: 'outline', disabled: !a.exoIdentity, title: a.exoIdentity ? '' : 'Erst einschränken – dann ist die App in Exchange angelegt', onclick: () => testDialog(a) }, 'Zugriff testen …'),
-        (a.grants || []).length && (a.rbac || []).length ? el('button', { class: 'danger', onclick: () => removeGrants(a) }, 'Tenantweite Rechte entfernen …') : null));
+        (a.grants || []).length && (a.rbac || []).some(r => isMailboxRole(r) && r.scope) ? el('button', { class: 'danger', onclick: () => removeGrants(a) }, 'Tenantweite Rechte entfernen …') : null));
   }
 
   // Graph-/EWS-Recht → Exchange-Anwendungsrolle
@@ -276,7 +286,7 @@
       roles: new Set(app ? (app.grants || []).map(g => roleFor(g.permission, appRoles)).filter(Boolean) : []),
       mode: 'group', group: null, scopeName: '', existingScope: '', au: '',
     };
-    if (app && !(app.grants || []).length) (app.rbac || []).forEach(r => w.roles.add(r.role));
+    if (app && !(app.grants || []).length) (app.rbac || []).filter(isMailboxRole).forEach(r => w.roles.add(r.role));
     const stepNames = ['App wählen', 'Rechte', 'Postfächer', 'Befehle', 'Testen'];
 
     const render = () => {

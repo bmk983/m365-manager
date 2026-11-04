@@ -210,6 +210,18 @@ function Get-RbacResourceRoles {
     $map
 }
 
+# Zuweisung an eine App: Postfachrolle (Application …, Bereich = CustomResourceScope) oder Exchange-Verwaltungsrolle
+# (z. B. per Exchange.ManageAsApp, Bereich = Schreibbereich). Leerer Bereich = ganze Organisation.
+function ConvertTo-RbacAppAssignment($r) {
+    $isApp = "$($r.Role)" -like 'Application *'
+    $scope = if ($isApp) { "$($r.CustomResourceScope)" }
+             elseif ($r.CustomRecipientWriteScope) { "$($r.CustomRecipientWriteScope)" }
+             elseif ($r.RecipientAdministrativeUnitScope) { "$($r.RecipientAdministrativeUnitScope)" }
+             elseif ($r.RecipientOrganizationalUnitScope) { "$($r.RecipientOrganizationalUnitScope)" }
+             else { '' }
+    @{ name = "$($r.Name)"; role = "$($r.Role)"; scope = $scope; enabled = [bool]$r.Enabled; app = $isApp }
+}
+
 $script:Ops.apps = {
     Use-RbacService Graph
     Use-RbacService Exchange
@@ -241,9 +253,7 @@ $script:Ops.apps = {
         $e = $exo[$a.appId]
         $a.exoName = if ($e) { "$($e.DisplayName)" } else { '' }
         $a.exoIdentity = if ($e) { "$($e.Identity)" } else { '' }
-        $a.rbac = @($assignments | Where-Object { $e -and ("$($_.RoleAssigneeName)" -eq "$($e.Name)" -or "$($_.RoleAssigneeName)" -eq "$($e.Identity)" -or "$($_.RoleAssignee)" -eq "$($e.Identity)") } | ForEach-Object {
-            @{ name = "$($_.Name)"; role = "$($_.Role)"; scope = "$($_.CustomResourceScope)"; enabled = [bool]$_.Enabled }
-        })
+        $a.rbac = @($assignments | Where-Object { $e -and ("$($_.RoleAssigneeName)" -eq "$($e.Name)" -or "$($_.RoleAssigneeName)" -eq "$($e.Identity)" -or "$($_.RoleAssignee)" -eq "$($e.Identity)") } | ForEach-Object { ConvertTo-RbacAppAssignment $_ })
         $a.policies = @($policies | Where-Object { "$($_.AppId)" -eq $a.appId } | ForEach-Object { @{ identity = "$($_.Identity)"; restriction = "$($_.AccessRight)"; scope = "$($_.ScopeName)" } })
         $a.grants = @($a.grants)
     }
@@ -254,7 +264,7 @@ $script:Ops.apps = {
         $apps["exo-$($e.AppId)"] = @{
             objectId = "$($e.ObjectId)"; appId = "$($e.AppId)"; displayName = "$($e.DisplayName)"; grants = @(); ownTenant = $true
             exoName = "$($e.DisplayName)"; exoIdentity = "$($e.Identity)"
-            rbac = @($rbac | ForEach-Object { @{ name = "$($_.Name)"; role = "$($_.Role)"; scope = "$($_.CustomResourceScope)"; enabled = [bool]$_.Enabled } })
+            rbac = @($rbac | ForEach-Object { ConvertTo-RbacAppAssignment $_ })
             policies = @($policies | Where-Object { "$($_.AppId)" -eq "$($e.AppId)" } | ForEach-Object { @{ identity = "$($_.Identity)"; restriction = "$($_.AccessRight)"; scope = "$($_.ScopeName)" } })
         }
     }
