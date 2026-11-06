@@ -64,6 +64,9 @@ public sealed class PtySession : IDisposable
             var si = new Native.STARTUPINFOEX();
             si.StartupInfo.cb = Marshal.SizeOf<Native.STARTUPINFOEX>();
             si.lpAttributeList = attrList;
+            // Keine Standard-Handles der App erben (leere Handles = nur die Pseudokonsole). Ohne das übernimmt pwsh
+            // veraltete oder umgeleitete Handles und beendet sich beim Start hart (0x80131623, FailFast).
+            si.StartupInfo.dwFlags = Native.STARTF_USESTDHANDLES;
 
             envBlock = Marshal.StringToHGlobalUni(BuildEnvironmentBlock(environment));
             var cmd = new StringBuilder(commandLine);
@@ -153,6 +156,11 @@ public sealed class PtySession : IDisposable
         if (_disposed != 0 || owner == IntPtr.Zero || ProcessId == 0) return false;
         lock (ConsoleGate)
         {
+            // AttachConsole ersetzt die Standard-Handles des App-Prozesses, FreeConsole stellt sie nicht wieder her.
+            // Die veralteten Werte würden an die nächste Sitzung weitergereicht – daher sichern und zurücksetzen.
+            var stdIn = Native.GetStdHandle(Native.STD_INPUT_HANDLE);
+            var stdOut = Native.GetStdHandle(Native.STD_OUTPUT_HANDLE);
+            var stdErr = Native.GetStdHandle(Native.STD_ERROR_HANDLE);
             if (!Native.AttachConsole((uint)ProcessId)) return false;
             try
             {
@@ -164,6 +172,9 @@ public sealed class PtySession : IDisposable
             finally
             {
                 Native.FreeConsole();
+                Native.SetStdHandle(Native.STD_INPUT_HANDLE, stdIn);
+                Native.SetStdHandle(Native.STD_OUTPUT_HANDLE, stdOut);
+                Native.SetStdHandle(Native.STD_ERROR_HANDLE, stdErr);
             }
         }
     }
@@ -215,6 +226,10 @@ public sealed class PtySession : IDisposable
     {
         public const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
         public const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
+        public const int STARTF_USESTDHANDLES = 0x00000100;
+        public const int STD_INPUT_HANDLE = -10;
+        public const int STD_OUTPUT_HANDLE = -11;
+        public const int STD_ERROR_HANDLE = -12;
         public const int PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
         public const uint INFINITE = 0xFFFFFFFF;
         public const uint WAIT_TIMEOUT = 0x00000102;
@@ -302,6 +317,12 @@ public sealed class PtySession : IDisposable
 
         [DllImport("kernel32.dll")]
         public static extern IntPtr GetConsoleWindow();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool SetStdHandle(int nStdHandle, IntPtr hHandle);
 
         [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
         public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
