@@ -5,3 +5,6 @@ M365Manager-Data/
 *.user
 .vs/
 tools/
+
+# Persönliche Suchbegriffe für tests/Privacy.Tests.ps1 – bleibt lokal
+tests/.private-terms.txt
