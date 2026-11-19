@@ -32,9 +32,29 @@ $global:M365 = @{
     ExtraGraphScopes = @()
     ScopeDeclined = @{}
     SpUrl       = $null
-    Expiry      = @{}
+    Expiry      = [hashtable]::Synchronized(@{})   # Ablauf der per Token verbundenen Dienste – teilt sich das Terminal mit der Hintergrund-Erneuerung
+    NativeCall  = $false
     Verbs       = @(Get-Verb | ForEach-Object Verb)
 }
+
+# Gemeinsamer Zustand für die Token-Erneuerung im Hintergrund (siehe token-renewal.ps1)
+$global:M365Renewal = [hashtable]::Synchronized(@{
+    Lock         = [object]::new()
+    Pipe         = $env:M365M_PIPE
+    File         = Join-Path $PSScriptRoot 'token-renewal.ps1'
+    Stop         = $false
+    LeadMinutes  = 15      # so lange vor Ablauf wird erneuert
+    CheckSeconds = 30
+    RetrySeconds = 120
+    Expiry       = $global:M365.Expiry
+    Generation   = [hashtable]::Synchronized(@{})
+    RenewedAt    = [hashtable]::Synchronized(@{})
+    FailedAt     = [hashtable]::Synchronized(@{})
+    LastError    = [hashtable]::Synchronized(@{})
+    GraphExtraScopes = ''
+    GraphClaims  = $null
+    PowerShell   = $null
+})
 
 $global:M365Patterns = @{
     # Diese Module sind lokal vorhanden, brauchen aber eine Verbindung -> vor dem Ausführen verbinden.
@@ -50,6 +70,7 @@ $global:M365Patterns = @{
 }
 
 . (Join-Path $PSScriptRoot 'permissions.ps1')
+. (Join-Path $PSScriptRoot 'token-renewal.ps1')
 $global:M365OpCache = @{}
 $global:M365ProxiedCommands = @()
 
@@ -226,13 +247,14 @@ function Connect-M365 {
             if ($wasConnected -and $svc -in 'Exchange', 'Purview') { Disconnect-M365ExoConnection -Compliance:($svc -eq 'Purview') }
 
             $detail = $upn
-            $global:M365.Expiry.Remove($svc)
+            Reset-M365TokenExpiry $svc
             $tokenOk = $false
             if ($useToken) {
                 try {
                     $expires = Connect-M365WithToken $svc $Scopes -Fresh:$Fresh -Reauth:$Reauth
                     $global:M365.Expiry[$svc] = $expires
                     $tokenOk = $true
+                    Start-M365TokenRenewal
                     if ($svc -eq 'SharePoint') { $detail = if ($global:M365.SpUrl) { $global:M365.SpUrl } else { "https://$($global:M365.SpTenant)-admin.sharepoint.com" } }
                 }
                 catch {
@@ -321,6 +343,7 @@ function Connect-M365WithToken([string]$Svc, [string[]]$Scopes, [switch]$Fresh, 
         'Graph' {
             # Einmal angeforderte Zusatz-Scopes bei jeder Erneuerung mitnehmen
             $global:M365.ExtraGraphScopes = @(@($global:M365.ExtraGraphScopes) + @($Scopes) | Where-Object { $_ } | Select-Object -Unique)
+            $global:M365Renewal.GraphExtraScopes = $global:M365.ExtraGraphScopes -join ' '   # Erneuerung mit denselben Rechten
             $t = Get-M365Token Graph -ExtraScopes $global:M365.ExtraGraphScopes -Fresh:$Fresh -Reauth:$Reauth
             Connect-M365GraphNative $t.Token
             # Nur die Claims merken (Scopes, Zeiten, Rollen) – das Token selbst nicht
@@ -361,6 +384,65 @@ function Connect-M365WithToken([string]$Svc, [string[]]$Scopes, [switch]$Fresh, 
 
 function Connect-M365GraphNative([string]$Token) {
     Microsoft.Graph.Authentication\Connect-MgGraph -AccessToken (ConvertTo-SecureString $Token -AsPlainText -Force) -NoWelcome -ErrorAction Stop
+}
+
+# ------------------------------------------------------------------ Token-Erneuerung im Hintergrund
+
+# Vor jedem (Neu-)Verbinden oder Trennen: Ablauf vergessen und Generation erhöhen –
+# eine gerade laufende Hintergrund-Erneuerung überschreibt die neue Verbindung dann nicht.
+function Reset-M365TokenExpiry([string]$Service) {
+    [System.Threading.Monitor]::Enter($global:M365Renewal.Lock)
+    try {
+        $global:M365Renewal.Generation[$Service] = 1 + [int]$global:M365Renewal.Generation[$Service]
+        $global:M365.Expiry.Remove($Service)
+        $global:M365Renewal.FailedAt.Remove($Service)
+        $global:M365Renewal.LastError.Remove($Service)
+    }
+    finally { [System.Threading.Monitor]::Exit($global:M365Renewal.Lock) }
+}
+
+<#
+.SYNOPSIS
+    Startet die Token-Erneuerung im Hintergrund (eigener Runspace, eigene Verbindung zur App).
+    Sie erneuert Graph-, Exchange- und Purview-Tokens rechtzeitig vor Ablauf – auch während ein Skript läuft.
+#>
+function Start-M365TokenRenewal {
+    $r = $global:M365Renewal
+    if (-not $r.Pipe -or $r.PowerShell) { return }
+    try {
+        $r.Stop = $false
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.Name = 'M365-TokenRenewal'
+        $rs.Open()
+        $ps = [powershell]::Create()
+        $ps.Runspace = $rs
+        $null = $ps.AddScript('param($Shared) . $Shared.File; Start-M365TokenRenewalLoop $Shared').AddArgument($r)
+        $r.PowerShell = $ps
+        $r.Handle = $ps.BeginInvoke()
+    }
+    catch {
+        $r.PowerShell = $null
+        Send-M365Host "log|Token-Erneuerung konnte nicht gestartet werden: $($_.Exception.Message)"
+    }
+}
+
+function Stop-M365TokenRenewal {
+    $r = $global:M365Renewal
+    $r.Stop = $true
+    $ps = $r.PowerShell
+    $r.PowerShell = $null
+    if ($ps) {
+        try { $null = $r.Handle.AsyncWaitHandle.WaitOne(2000) } catch { }
+        try { $ps.Runspace.Dispose(); $ps.Dispose() } catch { }
+    }
+}
+
+# Nach einer Erneuerung im Hintergrund die Claims des neuen Graph-Tokens übernehmen (Anzeige, Berechtigungsprüfung).
+function Sync-M365RenewedClaims {
+    $claims = $global:M365Renewal.GraphClaims
+    if (-not $claims) { return }
+    $global:M365Renewal.GraphClaims = $null
+    try { Set-M365GraphTokenInfo (ConvertFrom-M365Jwt ('x.' + $claims + '.x')) } catch { }
 }
 
 # Normale Anmeldung des jeweiligen Moduls (Fallback). Gibt das Detail für den Status zurück.
@@ -454,8 +536,15 @@ function Invoke-M365Native([string]$Native, $Parsed, [hashtable]$Extra = @{}, [o
     }
     foreach ($v in $Parsed.Positional) { $positional.Add($v) }
     $positional = @($positional)
-    if ($FromPipeline) { $PipelineInput | & $Native @named @positional }
-    else { & $Native @named @positional }
+    # Kennzeichnen: Dieser Aufruf des Original-Cmdlets (z. B. ExchangeOnlineManagement\Connect-ExchangeOnline)
+    # darf nicht wieder auf die Browser-Anmeldung umgeleitet werden.
+    $wasNative = $global:M365.NativeCall
+    $global:M365.NativeCall = $true
+    try {
+        if ($FromPipeline) { $PipelineInput | & $Native @named @positional }
+        else { & $Native @named @positional }
+    }
+    finally { $global:M365.NativeCall = $wasNative }
 }
 
 function Test-M365SameValue($Value, [string]$Expected) {
@@ -551,6 +640,20 @@ function global:Connect-PnPOnline {
             $global:M365.SpUrl = if ($admin) { $null } else { $url }
             Connect-M365 SharePoint -Force
         }
+}
+
+# Modul-qualifizierte Aufrufe (z. B. ExchangeOnlineManagement\Connect-ExchangeOnline) landen sonst direkt beim
+# Original-Cmdlet und öffnen eine eigene Anmeldung. Der PreCommandLookupAction-Hook leitet sie auf dieselben
+# Funktionen um – mit denselben Regeln (App-Anmeldung, anderes Konto/Tenant → unverändert an das Original).
+$global:M365ConnectRedirect = @{}
+foreach ($pair in @(
+        @('Microsoft.Graph.Authentication\Connect-MgGraph', 'Connect-MgGraph'),
+        @('ExchangeOnlineManagement\Connect-ExchangeOnline', 'Connect-ExchangeOnline'),
+        @('ExchangeOnlineManagement\Connect-IPPSSession', 'Connect-IPPSSession'),
+        @('MicrosoftTeams\Connect-MicrosoftTeams', 'Connect-MicrosoftTeams'),
+        @('PnP.PowerShell\Connect-PnPOnline', 'Connect-PnPOnline'))) {
+    $fn = Get-Item -LiteralPath ('function:' + $pair[1]) -ErrorAction SilentlyContinue
+    if ($fn) { $global:M365ConnectRedirect[$pair[0]] = $fn }
 }
 
 function Set-M365ConnectOverride([bool]$Enabled = $true) {
@@ -777,7 +880,7 @@ function Disconnect-M365 {
             }
             catch { }
             $global:M365.Tried.Remove($svc)
-            $global:M365.Expiry.Remove($svc)
+            Reset-M365TokenExpiry $svc
             Set-M365State $svc 'disconnected'
             Write-M365 "$svc getrennt." DarkGray
         }
@@ -861,8 +964,17 @@ function Initialize-M365SharePoint {
 # ------------------------------------------------------------------ Status & Hilfe
 
 function Get-M365Status {
+    Sync-M365RenewedClaims
+    $r = $global:M365Renewal
+    $time = { param($v) if ($v) { ([DateTimeOffset]$v).ToLocalTime().ToString('HH:mm:ss') } else { '' } }
     foreach ($k in $global:M365.State.Keys) {
-        [pscustomobject]@{ Dienst = $k; Status = $global:M365.State[$k] }
+        [pscustomobject]@{
+            Dienst             = $k
+            Status             = $global:M365.State[$k]
+            'Token gültig bis' = & $time $global:M365.Expiry[$k]
+            'Erneuert'         = & $time $r.RenewedAt[$k]
+            Hinweis            = "$($r.LastError[$k])"
+        }
     }
 }
 
@@ -1048,32 +1160,84 @@ function Resolve-M365Service([string]$Name, [switch]$NotFound) {
     $null
 }
 
-# Erneuert eine per Token übernommene Verbindung still, kurz bevor sie abläuft.
-function Update-M365Connection([string]$Name) {
+# Erneuert eine per Token übernommene Verbindung, kurz bevor sie abläuft.
+# Normalerweise erledigt das die Hintergrund-Erneuerung (token-renewal.ps1) still und ohne Neuverbinden.
+# -LastResort: nur wenn das Token in weniger als 2 Minuten abläuft (Hintergrund-Erneuerung hat nicht geklappt,
+# z. B. weil eine Anmeldung nötig ist) – dann lieber neu verbinden als mit 401 abbrechen.
+function Update-M365Connection([string]$Name, [switch]$LastResort) {
+    $minutes = if ($LastResort) { 2 } else { 5 }
+    $limit = [DateTimeOffset]::UtcNow.AddMinutes($minutes)
     $svc = Resolve-M365Service $Name
     if (-not $svc) { $svc = Resolve-M365Service $Name -NotFound }
     if (-not $svc -or $global:M365.State[$svc] -ne 'connected') { return $svc }
     $exp = $global:M365.Expiry[$svc]
-    if ($exp -and $exp -lt [DateTimeOffset]::UtcNow.AddMinutes(5)) {
+    if ($exp -and $exp -lt $limit) {
         Connect-M365 -Service $svc -Force -Auto -Quiet
     }
     $svc
 }
 
+# Ein Skript fragt die Exchange-Verbindung ab (Get-ConnectionInformation): Ist Exchange noch nicht verbunden,
+# jetzt über die Browser-Anmeldung verbinden – sonst findet das Skript nichts und meldet sich selbst neu an.
+# Außerdem warnen, wenn ein Skript eine zweite Version von ExchangeOnlineManagement geladen hat (eigene Verbindungen).
+function Invoke-M365ConnectionInfoCheck {
+    $global:M365.Busy = $true
+    try {
+        $mods = @(Get-Module ExchangeOnlineManagement)
+        if ($mods.Count -gt 1 -and -not $global:M365.ExoVersionWarned) {
+            $global:M365.ExoVersionWarned = $true
+            Write-Warning ("ExchangeOnlineManagement ist in mehreren Versionen geladen (" + (($mods | ForEach-Object { $_.Version }) -join ', ') +
+                "). Jede Version hat eigene Verbindungen – das Skript sieht die Verbindung des Terminals nur in der Version " +
+                "der App. Abhilfe: im Skript kein Import-Module mit -RequiredVersion/-Force bzw. kein anderer Modulpfad.")
+        }
+        $connect = $global:M365.State.Exchange -ne 'connected' -and -not $global:M365.Tried.Exchange -and $env:M365M_PIPE
+    }
+    finally { $global:M365.Busy = $false }
+    if ($connect) { Connect-M365 -Service Exchange -Auto }
+}
+
 $ExecutionContext.InvokeCommand.PreCommandLookupAction = {
     param([string]$CommandName, [System.Management.Automation.CommandLookupEventArgs]$LookupArgs)
-    if ($global:M365.Busy -or -not $global:M365.AutoConnect) { return }
-    if ($CommandName -notmatch '^[A-Za-z]+-[A-Za-z0-9]+$') { return }   # interne Modul-Befehle (mit "_") ignorieren
-    if ($LookupArgs.CommandOrigin -eq 'Runspace') {
-        Update-M365Connection $CommandName | Out-Null
-        $svc = Resolve-M365Service $CommandName
-        if ($svc -and $global:M365.State[$svc] -ne 'connected' -and -not $global:M365.Tried[$svc]) { Connect-M365 -Service $svc -Auto }
+    # Befehle, die dieser Hook selbst aufruft, lösen ihn erneut aus – nicht noch einmal auswerten
+    if ($global:M365.Busy -or $global:M365.InLookup) { return }
+    # Modul-qualifizierte Aufrufe (ExchangeOnlineManagement\Get-Mailbox) wie unqualifizierte behandeln
+    $name = $CommandName
+    $qualified = $false
+    if ($name -match '^[\w.]+\\([A-Za-z]+-[A-Za-z0-9]+)$') { $name = $Matches[1]; $qualified = $true }
+    elseif ($name -notmatch '^[A-Za-z]+-[A-Za-z0-9]+$') { return }   # interne Modul-Befehle (mit "_") ignorieren
+
+    # Auch ExchangeOnlineManagement\Connect-ExchangeOnline & Co. aus Skripten über die Browser-Anmeldung
+    if ($qualified -and -not $global:M365.NativeCall -and $global:M365.InterceptConnect -and $global:M365ConnectRedirect.ContainsKey($CommandName)) {
+        $LookupArgs.Command = $global:M365ConnectRedirect[$CommandName]
+        $LookupArgs.StopSearch = $true
+        return
     }
-    # Fehlende Graph-Berechtigung für Funktionen der Registry rechtzeitig anfordern – auch in Skripten
-    if ($CommandName -match '-Mg') {
-        $global:M365.Busy = $true
-        try { Invoke-M365ScopePreflight $CommandName } finally { $global:M365.Busy = $false }
+    if (-not $global:M365.AutoConnect) { return }
+
+    $global:M365.InLookup = $true
+    try {
+        if ($LookupArgs.CommandOrigin -eq 'Runspace') {
+            Update-M365Connection $name | Out-Null
+            $svc = Resolve-M365Service $name
+            if ($svc -and $global:M365.State[$svc] -ne 'connected' -and -not $global:M365.Tried[$svc]) { Connect-M365 -Service $svc -Auto }
+        }
+        else {
+            # In Skripten: Notfall-Erneuerung nur kurz vor Ablauf (normalerweise erneuert der Hintergrund still).
+            # Die Vorprüfung steht hier direkt, weil sie bei jedem Befehl eines Skripts läuft.
+            $limit = [DateTimeOffset]::UtcNow.AddMinutes(2)
+            foreach ($s in 'Graph', 'Exchange', 'Purview', 'Teams', 'SharePoint') {
+                $e = $global:M365.Expiry[$s]
+                if ($e -and $e -lt $limit) { Update-M365Connection $name -LastResort | Out-Null; break }
+            }
+            if ($name -eq 'Get-ConnectionInformation') { Invoke-M365ConnectionInfoCheck }
+        }
+        # Fehlende Graph-Berechtigung für Funktionen der Registry rechtzeitig anfordern – auch in Skripten
+        if ($name -match '-Mg') {
+            $global:M365.Busy = $true
+            try { Invoke-M365ScopePreflight $name } finally { $global:M365.Busy = $false }
+        }
     }
+    finally { $global:M365.InLookup = $false }
 }
 $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
     param([string]$CommandName, [System.Management.Automation.CommandLookupEventArgs]$LookupArgs)
@@ -1091,6 +1255,9 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
 # Hält den Status aktuell, auch wenn manuell Connect-MgGraph / Connect-ExchangeOnline … benutzt wurde.
 function Sync-M365State {
     if ($global:M365.Busy) { return }
+    Sync-M365RenewedClaims
+    # Busy: Die Abfragen hier (Get-ConnectionInformation …) sollen keine automatische Verbindung auslösen
+    $global:M365.Busy = $true
     try {
         if (Get-Module Microsoft.Graph.Authentication) {
             $ctx = Get-MgContext
@@ -1109,6 +1276,7 @@ function Sync-M365State {
         }
     }
     catch { }
+    finally { $global:M365.Busy = $false }
 }
 
 # ------------------------------------------------------------------ Prompt & Oberfläche
@@ -1152,6 +1320,9 @@ try { Register-M365PrivilegedProxies } catch { }
 
 # Kanal zur App sofort belegen – die App akzeptiert nur diesen PowerShell-Prozess.
 if ($env:M365M_PIPE) { try { Open-M365Channel } catch { } }
+
+# Beim Beenden die Hintergrund-Erneuerung anhalten (sonst wartet "exit" auf ihren Runspace)
+$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action { try { Stop-M365TokenRenewal } catch { } }
 
 $custom = Join-Path $env:M365M_DATA 'custom.ps1'
 if (Test-Path $custom) { . $custom }

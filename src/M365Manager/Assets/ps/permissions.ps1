@@ -153,6 +153,7 @@ function ConvertFrom-M365Jwt([string]$Token) {
 function Set-M365GraphTokenInfo($Info) { $global:M365.GraphToken = $Info }
 
 function Get-M365GraphTokenInfo {
+    if ($global:M365Renewal -and $global:M365Renewal.GraphClaims) { Sync-M365RenewedClaims }   # im Hintergrund erneuert
     $info = $global:M365.GraphToken
     if ($info) { return $info }
     # Kein selbst ausgestelltes Token bekannt (z. B. klassische Modul-Anmeldung): was Graph selbst meldet

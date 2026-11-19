@@ -37,7 +37,7 @@ public sealed class TerminalView : Grid, IDisposable
     public event Action<string, string>? ProfileValueReported;
 
     /// <summary>Liefert Tokens aus der Browser-Sitzung des Profils (Dienst, zusätzliche Scopes).</summary>
-    public Func<string, string?, bool, bool, Action<string>, Task<TokenResult>>? TokenProvider { get; set; }
+    public TokenSource? TokenProvider { get; set; }
     /// <summary>Out-GridView: Daten (JSON), Modus (none/wait/single/multiple) -> ausgewählte Zeilen (kommagetrennte Indizes).</summary>
     public Func<string, string, Task<string>>? GridProvider { get; set; }
 
@@ -291,11 +291,9 @@ public sealed class TerminalView : Grid, IDisposable
         if (kind != "token" || args.Length == 0) throw new InvalidOperationException("Unbekannte Anfrage.");
         var provider = TokenProvider ?? throw new InvalidOperationException("Keine Token-Quelle.");
         var extra = args.Length > 1 && args[1].Length > 0 ? args[1] : null;
-        var flags = args.Length > 2 ? args[2].Split(',') : [];
-        var fresh = flags.Contains("fresh");
-        var reauth = flags.Contains("reauth");
+        var flags = TokenFlagsParser.Parse(args.Length > 2 ? args[2] : null);
         // WebView2 und Fenster gehören auf den UI-Thread.
-        var token = await Dispatcher.InvokeAsync(() => provider(args[0], extra, fresh, reauth, notify)).Task.Unwrap();
+        var token = await Dispatcher.InvokeAsync(() => provider(args[0], extra, flags, notify)).Task.Unwrap();
         return token.AccessToken + "|" + token.ExpiresOn.ToUnixTimeSeconds();
     }
 

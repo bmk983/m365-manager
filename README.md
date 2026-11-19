@@ -80,6 +80,8 @@ Die Chips über dem Terminal zeigen den Status (grau = getrennt, gelb = verbinde
 
 Eigene Erweiterungen kommen in `M365Manager-Data\custom.ps1`. Die Datei wird bei jedem Terminalstart geladen.
 
+**Lange Skripte:** Graph-, Exchange- und Purview-Tokens werden im Hintergrund still erneuert, etwa 15 Minuten vor Ablauf, und direkt in der bestehenden Verbindung ausgetauscht. Das funktioniert auch mitten in einem laufenden Skript, ohne Anmeldefenster und ohne neue Berechtigungen. `Get-M365Status` zeigt, wie lange jedes Token gilt und wann es zuletzt erneuert wurde. Skripte, die im Terminal oder im Editor laufen, sehen dieselben Verbindungen. Das gilt auch für modul-qualifizierte Aufrufe wie `ExchangeOnlineManagement\Connect-ExchangeOnline`. Hintergründe, Grenzen (z. B. `Start-Job`, `pwsh -File`) und Tests stehen in [docs/TOKEN-RENEWAL.md](docs/TOKEN-RENEWAL.md).
+
 ## Graph-Berechtigungen
 
 Fehlende Graph-Berechtigungen werden erkannt und **inkrementell** angefordert, also nur bei Bedarf und mit Prüfung des neu ausgestellten Tokens. Vor privilegierten Aktionen (MFA-Methoden verwalten, Sessions widerrufen) prüft die App Scope, aktive Rolle und Zielkonto. Diagnose im Terminal mit `Get-M365GraphPermissions` oder über das Menü am Graph-Chip. Details stehen in [docs/GRAPH-PERMISSIONS.md](docs/GRAPH-PERMISSIONS.md).

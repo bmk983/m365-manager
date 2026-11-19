@@ -763,7 +763,7 @@ public partial class MainWindow : FluentWindow
     {
         if (_rbac is null)
         {
-            _rbacHost = new RbacHost(() => _profile, (service, extra, fresh, reauth, notify) => _tokens.GetAsync(service, extra, fresh, reauth, notify), Dispatcher);
+            _rbacHost = new RbacHost(() => _profile, (service, extra, flags, notify) => _tokens.GetAsync(service, extra, flags, notify), Dispatcher);
             _rbac = new RbacView(_rbacHost, App.IsDark)
             {
                 OpenInEditor = (name, code) =>
@@ -840,7 +840,7 @@ public partial class MainWindow : FluentWindow
             if (_activeTerminal?.View == v) RefreshChips();
         };
         view.ProfileValueReported += OnProfileValueReported;
-        view.TokenProvider = (service, extraScopes, fresh, reauth, notify) => _tokens.GetAsync(service, extraScopes, fresh, reauth, notify);
+        view.TokenProvider = (service, extraScopes, flags, notify) => _tokens.GetAsync(service, extraScopes, flags, notify);
         view.GridProvider = (json, mode) => GridWindow.ShowAsync(this, json, mode);
         TerminalHost.Children.Add(view);
 

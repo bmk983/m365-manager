@@ -20,7 +20,7 @@ public sealed class RbacHost : IDisposable
     private const string Marker = "\u001eM365RBAC ";
 
     private readonly Func<AdminProfile> _profile;
-    private readonly Func<string, string?, bool, bool, Action<string>, Task<TokenResult>> _tokens;
+    private readonly TokenSource _tokens;
     private readonly Dispatcher _dispatcher;
     private readonly SemaphoreSlim _startGate = new(1, 1);
     private readonly SemaphoreSlim _writeGate = new(1, 1);
@@ -33,7 +33,7 @@ public sealed class RbacHost : IDisposable
     /// <summary>Hinweise während einer Anfrage (z. B. "Anmeldefenster ist geöffnet").</summary>
     public event Action<string>? Notice;
 
-    public RbacHost(Func<AdminProfile> profile, Func<string, string?, bool, bool, Action<string>, Task<TokenResult>> tokens, Dispatcher dispatcher)
+    public RbacHost(Func<AdminProfile> profile, TokenSource tokens, Dispatcher dispatcher)
     {
         _profile = profile;
         _tokens = tokens;
@@ -191,13 +191,13 @@ public sealed class RbacHost : IDisposable
         }
         if (args[0] is not ("Graph" or "Exchange"))
             throw new InvalidOperationException("Der RBAC-Bereich verbindet sich nur mit Exchange Online und (lesend) mit Graph.");
-        var flags = args.Length > 2 ? args[2].Split(',') : [];
+        var flags = TokenFlagsParser.Parse(args.Length > 2 ? args[2] : null);
         void Forward(string text)
         {
             notify(text);
             if (!string.IsNullOrEmpty(text)) _dispatcher.BeginInvoke(() => Notice?.Invoke(text));
         }
-        var token = await _dispatcher.InvokeAsync(() => _tokens(args[0], extra, flags.Contains("fresh"), flags.Contains("reauth"), Forward)).Task.Unwrap();
+        var token = await _dispatcher.InvokeAsync(() => _tokens(args[0], extra, flags, Forward)).Task.Unwrap();
         return token.AccessToken + "|" + token.ExpiresOn.ToUnixTimeSeconds();
     }
 

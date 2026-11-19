@@ -38,20 +38,52 @@ public sealed class PipeListener : IDisposable
         return false;
     }
 
+    /// <summary>
+    /// Gleichzeitige Verbindungen: die Sitzung selbst plus die Token-Erneuerung im Hintergrund (eigene Verbindung,
+    /// damit sie auch während eines laufenden Skripts arbeiten kann). Alle müssen vom erwarteten Prozess kommen.
+    /// </summary>
+    private const int MaxConnections = 4;
+
     private async Task LoopAsync(Action<string> onLine, Func<string, string[], Action<string>, Task<string>> onRequest, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
+            NamedPipeServerStream? server = null;
             try
             {
-                await using var server = new NamedPipeServerStream(Name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+                server = new NamedPipeServerStream(Name, PipeDirection.InOut, MaxConnections, PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 await server.WaitForConnectionAsync(ct);
                 if (!IsExpectedClient(server))
                 {
                     server.Disconnect();
+                    await server.DisposeAsync();
                     continue;
                 }
+                var connection = server;
+                server = null;
+                _ = Task.Run(() => ServeAsync(connection, onLine, onRequest, ct), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                if (server is not null) await server.DisposeAsync();
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (server is not null) await server.DisposeAsync();
+                Services.Log.Write("Pipe: " + ex.Message);
+                await Task.Delay(500, ct).ContinueWith(_ => { });
+            }
+        }
+    }
+
+    private static async Task ServeAsync(NamedPipeServerStream server, Action<string> onLine, Func<string, string[], Action<string>, Task<string>> onRequest, CancellationToken ct)
+    {
+        await using var connection = server;
+        try
+        {
+            {
                 using var reader = new StreamReader(server, new UTF8Encoding(false), false, 4096, leaveOpen: true);
                 await using var writer = new StreamWriter(server, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
                 var writeLock = new SemaphoreSlim(1, 1);
@@ -92,15 +124,12 @@ public sealed class PipeListener : IDisposable
                     }, ct);
                 }
             }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                Services.Log.Write("Pipe: " + ex.Message);
-                await Task.Delay(500, ct).ContinueWith(_ => { });
-            }
+        }
+        catch (OperationCanceledException) { }
+        catch (IOException) { }   // Verbindung vom Client getrennt
+        catch (Exception ex)
+        {
+            Services.Log.Write("Pipe: " + ex.Message);
         }
     }
 

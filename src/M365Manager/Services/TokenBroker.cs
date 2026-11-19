@@ -13,6 +13,35 @@ namespace M365Manager.Services;
 
 public sealed record TokenResult(string AccessToken, DateTimeOffset ExpiresOn);
 
+/// <summary>Optionen einer Token-Anfrage aus einer PowerShell (Feld "flags", kommagetrennt).</summary>
+[Flags]
+public enum TokenFlags
+{
+    None = 0,
+    /// <summary>Kein zwischengespeichertes Access Token verwenden – neu ausstellen lassen.</summary>
+    Fresh = 1,
+    /// <summary>Interaktiv neu anmelden (prompt=login).</summary>
+    Reauth = 2,
+    /// <summary>Nur still erneuern (Refresh-Token oder unsichtbare Browser-Sitzung) – nie ein Fenster öffnen.</summary>
+    Silent = 4,
+}
+
+public static class TokenFlagsParser
+{
+    public static TokenFlags Parse(string? text)
+    {
+        var flags = TokenFlags.None;
+        foreach (var f in (text ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            flags |= f switch { "fresh" => TokenFlags.Fresh, "reauth" => TokenFlags.Reauth, "silent" => TokenFlags.Silent, _ => TokenFlags.None };
+        }
+        return flags;
+    }
+}
+
+/// <summary>Token-Quelle für eine PowerShell-Sitzung (Dienst, zusätzliche Scopes, Optionen, Zwischenmeldungen).</summary>
+public delegate Task<TokenResult> TokenSource(string service, string? extraScopes, TokenFlags flags, Action<string> notify);
+
 public sealed class TokenException(string message) : Exception(message);
 
 /// <summary>
@@ -85,7 +114,13 @@ public sealed class TokenBroker
 
     /// <param name="fresh">Kein zwischengespeichertes Access Token verwenden – neu ausstellen lassen (z. B. nach neuer Zustimmung).</param>
     /// <param name="reauth">Zusätzlich interaktiv neu anmelden (prompt=login), z. B. nach einer Conditional-Access-Anforderung.</param>
-    public async Task<TokenResult> GetAsync(string target, string? extraScopes = null, bool fresh = false, bool reauth = false, Action<string>? progress = null)
+    public Task<TokenResult> GetAsync(string target, string? extraScopes, TokenFlags flags, Action<string>? progress = null) =>
+        GetAsync(target, extraScopes, flags.HasFlag(TokenFlags.Fresh), flags.HasFlag(TokenFlags.Reauth) && !flags.HasFlag(TokenFlags.Silent), progress,
+                 silent: flags.HasFlag(TokenFlags.Silent));
+
+    /// <param name="silent">Nur still erneuern: Refresh-Token, sonst unsichtbare Browser-Sitzung. Nie ein Anmeldefenster –
+    /// dann Fehler (z. B. für die automatische Erneuerung während eines laufenden Skripts).</param>
+    public async Task<TokenResult> GetAsync(string target, string? extraScopes = null, bool fresh = false, bool reauth = false, Action<string>? progress = null, bool silent = false)
     {
         var profile = _profile();
         var (clientId, scope, label) = Describe(target, profile, extraScopes);
@@ -134,6 +169,8 @@ public sealed class TokenBroker
             var pkce = Pkce.Create();
             var code = reauth ? null : await AuthorizeAsync(profile, tenant, clientId, scope, pkce, interactive: false, label);
             Log.Write($"Token {target}: unsichtbarer Versuch {(code is null ? "ohne Ergebnis" : "erfolgreich")} ({watch.ElapsedMilliseconds} ms)");
+            if (code is null && silent)
+                throw new TokenException("Stille Erneuerung nicht möglich – eine Anmeldung ist nötig.");
             if (code is null)
             {
                 progress?.Invoke("Anmeldefenster für " + label + " ist geöffnet – bitte dort anmelden.");
