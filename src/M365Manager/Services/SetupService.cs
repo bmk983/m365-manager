@@ -54,12 +54,21 @@ public static class SetupService
 
     public static string PortablePwshPath => Path.Combine(AppPaths.PwshDir, "pwsh.exe");
 
+    /// <summary>
+    /// Portable pwsh inklusive der eingebauten Module. Fehlen sie (abgebrochenes Update, Virenscanner),
+    /// startet pwsh zwar, findet aber Test-Path &amp; Co. nicht – dann gilt sie als defekt und wird neu geladen.
+    /// </summary>
+    public static bool PortablePwshIntact =>
+        File.Exists(PortablePwshPath) &&
+        new[] { "Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility", "Microsoft.PowerShell.Security" }
+            .All(m => File.Exists(Path.Combine(AppPaths.PwshDir, "Modules", m, m + ".psd1")));
+
     /// <summary>Portable pwsh, ersatzweise ein installiertes PowerShell 7.</summary>
     public static string? PwshPath
     {
         get
         {
-            if (File.Exists(PortablePwshPath)) return PortablePwshPath;
+            if (PortablePwshIntact) return PortablePwshPath;
             var installed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe");
             return File.Exists(installed) ? installed : null;
         }
@@ -142,8 +151,10 @@ public static class SetupService
 
     private static async Task EnsurePwshAsync(bool update)
     {
-        if (File.Exists(PortablePwshPath) && !update)
+        if (PortablePwshIntact && !update)
             return;
+        if (File.Exists(PortablePwshPath) && !PortablePwshIntact)
+            Emit("⚠ Die portable PowerShell ist unvollständig (eingebaute Module fehlen) – wird neu geladen …");
 
         Emit("Suche aktuelle PowerShell-7-Version auf GitHub …");
         using var http = CreateHttp();
@@ -151,7 +162,7 @@ public static class SetupService
         var root = release.RootElement;
         var version = root.GetProperty("tag_name").GetString()!.TrimStart('v');
 
-        if (File.Exists(PortablePwshPath) && PwshVersion == version)
+        if (PortablePwshIntact && PwshVersion == version)
         {
             Emit("✓ PowerShell " + version + " ist aktuell.");
             return;
@@ -219,14 +230,18 @@ public static class SetupService
         ZipFile.ExtractToDirectory(tmpZip, staging);
         TryDelete(tmpZip);
 
+        // Alte Version erst wegbenennen statt in place zu löschen: Ein Löschen, das an einer gesperrten Datei
+        // abbricht, ließ früher eine halbe pwsh ohne eingebaute Module zurück. Umbenennen klappt ganz oder gar nicht.
         if (Directory.Exists(AppPaths.PwshDir))
         {
-            try { await RetryIoAsync(() => DeleteDirectory(AppPaths.PwshDir)); }
+            var old = AppPaths.PwshDir + ".new-old-" + Guid.NewGuid().ToString("N")[..8];
+            try { await RetryIoAsync(() => Directory.Move(AppPaths.PwshDir, old)); }
             catch (Exception ex)
             {
                 TryDeleteDirectory(staging);
                 throw new InvalidOperationException("Die alte PowerShell wird noch verwendet. Bitte alle Profilfenster schließen und erneut aktualisieren. (" + ex.Message + ")");
             }
+            TryDeleteDirectory(old);   // Reste räumt CleanupStaleStaging beim nächsten Start weg (Muster pwsh.new*)
         }
 
         // Virenscanner prüfen frisch entpackte Dateien und halten sie dabei kurz offen –
