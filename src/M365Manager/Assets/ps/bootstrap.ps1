@@ -642,6 +642,41 @@ function global:Connect-PnPOnline {
         }
 }
 
+# Azure (Az.Accounts): Die App hat dafür keine eigene Browser-Anmeldung. Connect-AzAccount bekommt aber Tenant
+# und Konto der bestehenden M365-Anmeldung vorausgefüllt und läuft ohne WAM – WAM nimmt sonst gern still das
+# Windows-Konto. "-Scope Process": Die Az-Konfiguration des Benutzers bleibt unverändert.
+function Get-M365AzSignInDefaults {
+    $info = try { Get-M365GraphTokenInfo } catch { $null }
+    $tenant = if ($info -and $info.TenantId) { "$($info.TenantId)" } elseif ($global:M365.Tenant) { "$($global:M365.Tenant)" } else { $null }
+    $upn = if ($info -and $info.Account) { "$($info.Account)" } elseif ($global:M365.Upn) { "$($global:M365.Upn)" } else { $null }
+    [pscustomobject]@{ Tenant = $tenant; Upn = $upn; TenantNames = @(@($tenant, $global:M365.Tenant) | Where-Object { $_ }) }
+}
+
+function global:Connect-AzAccount {
+    $p = ConvertFrom-M365Arguments $args
+    # App-, Token- und Managed-Identity-Anmeldungen gehen unverändert an das Original-Cmdlet
+    $appAuth = 'ServicePrincipal', 'Identity', 'AccessToken', 'Credential', 'CertificateThumbprint', 'CertificatePath',
+        'ApplicationId', 'FederatedToken', 'KeyVaultAccessToken', 'GraphAccessToken', 'MicrosoftGraphAccessToken', 'ClientAssertion'
+    $isApp = @($p.Named.Keys | Where-Object { $_ -in $appAuth }).Count -gt 0
+    $extra = @{}
+    if ($global:M365.InterceptConnect -and -not $isApp) {
+        $d = Get-M365AzSignInDefaults
+        $tenantKey = @($p.Named.Keys | Where-Object { $_ -in 'Tenant', 'TenantId' }) | Select-Object -First 1
+        $sameTenant = -not $tenantKey -or @($d.TenantNames | Where-Object { Test-M365SameValue $p.Named[$tenantKey] $_ }).Count -gt 0
+        if (-not $tenantKey -and $d.Tenant) { $extra.Tenant = $d.Tenant }
+        if ($sameTenant -and -not $p.Named.ContainsKey('AccountId') -and $d.Upn) { $extra.AccountId = $d.Upn }
+        $wamOff = $false
+        try { $null = Update-AzConfig -EnableLoginByWam $false -Scope Process -ErrorAction Stop -WarningAction SilentlyContinue; $wamOff = $true } catch { }
+        $parts = @()
+        if ($extra.Tenant) { $parts += "Tenant $($extra.Tenant)" }
+        if ($extra.AccountId) { $parts += "Konto $($extra.AccountId)" }
+        $from = if ($parts) { ($parts -join ', ') + ' aus der M365-Anmeldung' } else { 'Angaben des Aufrufs' }
+        Write-M365 "↪ Connect-AzAccount: $from$(if ($wamOff) { ' · ohne WAM (nicht das Windows-Konto)' })" DarkGray
+        Write-M365 '  Die Anmeldung öffnet sich im Standardbrowser – dort dieses Konto wählen.' DarkGray
+    }
+    Invoke-M365Native 'Az.Accounts\Connect-AzAccount' $p $extra
+}
+
 # Modul-qualifizierte Aufrufe (z. B. ExchangeOnlineManagement\Connect-ExchangeOnline) landen sonst direkt beim
 # Original-Cmdlet und öffnen eine eigene Anmeldung. Der PreCommandLookupAction-Hook leitet sie auf dieselben
 # Funktionen um – mit denselben Regeln (App-Anmeldung, anderes Konto/Tenant → unverändert an das Original).
@@ -651,7 +686,8 @@ foreach ($pair in @(
         @('ExchangeOnlineManagement\Connect-ExchangeOnline', 'Connect-ExchangeOnline'),
         @('ExchangeOnlineManagement\Connect-IPPSSession', 'Connect-IPPSSession'),
         @('MicrosoftTeams\Connect-MicrosoftTeams', 'Connect-MicrosoftTeams'),
-        @('PnP.PowerShell\Connect-PnPOnline', 'Connect-PnPOnline'))) {
+        @('PnP.PowerShell\Connect-PnPOnline', 'Connect-PnPOnline'),
+        @('Az.Accounts\Connect-AzAccount', 'Connect-AzAccount'))) {
     $fn = Get-Item -LiteralPath ('function:' + $pair[1]) -ErrorAction SilentlyContinue
     if ($fn) { $global:M365ConnectRedirect[$pair[0]] = $fn }
 }
