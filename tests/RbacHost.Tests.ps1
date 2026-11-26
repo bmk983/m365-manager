@@ -13,6 +13,23 @@ function Get-ManagementRole { }
 function New-Thing { 'erster Befehl ok' }
 function Fail-Thing { Write-Error 'Exchange sagt nein' }
 function Never-Thing { 'darf nicht laufen' }
+# Graph (nur lesend) und Exchange für die App-Liste
+function Get-M365GraphTokenInfo { [pscustomobject]@{ TenantId = '00000000-0000-0000-0000-0000000000aa' } }
+function Invoke-M365GraphGet([string]$Uri) {
+    if ($Uri -match "servicePrincipals\(appId='([^']+)'\)") { return [pscustomobject]@{ id = "res-$($Matches[1])"; appRoles = @([pscustomobject]@{ id = 'r1'; value = 'Mail.Read' }) } }
+    if ($Uri -match 'res-00000003.*appRoleAssignedTo') { return [pscustomobject]@{ value = @([pscustomobject]@{ id = 'g1'; principalId = 'sp-mail'; principalDisplayName = 'Mail-App'; appRoleId = 'r1' }) } }
+    if ($Uri -match 'appRoleAssignedTo') { return [pscustomobject]@{ value = @() } }
+    if ($Uri -match 'appOwnerOrganizationId') {
+        return [pscustomobject]@{ value = @(
+            [pscustomobject]@{ id = 'sp-new'; appId = 'app-new'; displayName = 'Neue App'; servicePrincipalType = 'Application'; appOwnerOrganizationId = '00000000-0000-0000-0000-0000000000aa' }
+            [pscustomobject]@{ id = 'sp-mail'; appId = 'app-mail'; displayName = 'Mail-App'; servicePrincipalType = 'Application'; appOwnerOrganizationId = '00000000-0000-0000-0000-0000000000aa' }
+            [pscustomobject]@{ id = 'sp-mi'; appId = 'app-mi'; displayName = 'Identitaet'; servicePrincipalType = 'ManagedIdentity'; appOwnerOrganizationId = '00000000-0000-0000-0000-0000000000aa' }) }
+    }
+    throw "unerwartete Graph-Anfrage: $Uri"
+}
+function Get-ServicePrincipal { }
+function Get-ManagementRoleAssignment { }
+function Get-ApplicationAccessPolicy { }
 '@
     $src = [IO.File]::ReadAllText($copy).Replace('# ------------------------------------------------------------------ Schleife', $fakes + "`n# ------------------------------------------------------------------ Schleife")
     [IO.File]::WriteAllText($copy, $src, [Text.UTF8Encoding]::new($true))
@@ -42,6 +59,7 @@ function Never-Thing { 'darf nicht laufen' }
         '{"id":6,"op":"run","script":"Connect-M365 Graph -Scopes AppRoleAssignment.ReadWrite.All"}'
         '{"id":7,"op":"run","script":"Invoke-MgGraphRequest DELETE v1.0/servicePrincipals/x"}'
         '{"id":8,"op":"run","script":"New-Thing -Name Firma-MgmtGruppe"}'
+        '{"id":9,"op":"apps","args":{}}'
     )
     $script:RbacSource = Get-Content (Join-Path $PSScriptRoot '..\src\M365Manager\Assets\ps\rbac-host.ps1') -Raw
     $script:RbacJs = Get-Content (Join-Path $PSScriptRoot '..\src\M365Manager\Assets\rbac\rbac.js') -Raw
@@ -51,7 +69,22 @@ AfterAll { Remove-Item $script:Work -Recurse -Force -ErrorAction SilentlyContinu
 
 Describe 'RBAC-Hintergrund-PowerShell' {
     It 'beantwortet jede Anfrage genau einmal' {
-        $script:Replies.Count | Should -Be 8
+        $script:Replies.Count | Should -Be 9
+    }
+    It 'listet auch eigene Apps ohne Berechtigungen (frisch angelegt), ohne Doppelte und ohne Managed Identities' {
+        $r = $script:Replies[8] | ConvertFrom-Json
+        $r.ok | Should -BeTrue
+        $names = @($r.data | ForEach-Object displayName)
+        $names | Should -Contain 'Neue App'
+        $names | Should -Not -Contain 'Identitaet'
+        @($names | Where-Object { $_ -eq 'Mail-App' }).Count | Should -Be 1
+        $new = $r.data | Where-Object displayName -eq 'Neue App'
+        $new.appId | Should -Be 'app-new'
+        $new.ownTenant | Should -BeTrue
+        @($new.grants).Count | Should -Be 0
+        $mail = $r.data | Where-Object displayName -eq 'Mail-App'
+        $mail.grants[0].permission | Should -Be 'Mail.Read'
+        $mail.appId | Should -Be 'app-mail'
     }
     It 'liefert auch eine einzelne Zeile als Liste' {
         $script:Replies[0] | Should -Match '"data":\[\{'

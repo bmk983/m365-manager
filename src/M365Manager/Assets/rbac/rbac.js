@@ -212,26 +212,34 @@
     return ['ohne Postfachrechte', '', ''];
   };
 
+  // Postfachbezug: Entra-Postfachrechte, RBAC-Zuweisung, alte Access Policy oder schon in Exchange angelegt
+  const hasMailbox = a => !!((a.grants || []).length || (a.rbac || []).length || (a.policies || []).length || a.exoIdentity);
+
   async function viewApps(force) {
-    const apps = await load('apps', 'apps', 'Lese Anwendungen mit Postfach-Berechtigungen (Entra + Exchange) …', force);
-    state.apps ??= { chip: 'all', search: '' };
+    const apps = await load('apps', 'apps', 'Lese Anwendungen (Entra + Exchange) …', force);
+    state.apps ??= { chip: 'all', search: '', all: false };
     const s = state.apps;
+    const hidden = apps.filter(a => !hasMailbox(a)).length;
     const f = viewFrame({
       title: 'Anwendungen',
-      sub: 'Apps mit Anwendungsberechtigungen auf Postfächer (z. B. Mail.ReadWrite, Mail.Send, Calendars.ReadWrite). ' +
+      sub: (s.all ? 'Alle App-Registrierungen des eigenen Tenants und Apps mit Postfach-Berechtigungen. '
+        : 'Apps mit Anwendungsberechtigungen auf Postfächer (z. B. Mail.ReadWrite, Mail.Send, Calendars.ReadWrite). ') +
         '<b>Tenantweit</b> = Zugriff auf alle Postfächer. Mit <b>RBAC for Applications</b> lässt sich das auf eine Gruppe von Postfächern beschränken.',
-      chips: [['all', 'Alle'], ['wide', 'Tenantweit'], ['mixed', 'Gemischt'], ['scoped', 'Eingeschränkt'], ['admin', 'Exchange-Verwaltung']], chip: s.chip,
-      onChip: k => { s.chip = k; viewApps(); }, search: s.search, onSearch: v => { s.search = v; refresh(); },
+      chips: [['all', 'Alle'], ['wide', 'Tenantweit'], ['mixed', 'Gemischt'], ['scoped', 'Eingeschränkt'], ['admin', 'Exchange-Verwaltung'], ['none', 'Ohne Postfachrechte']], chip: s.chip,
+      onChip: k => { s.chip = k; if (k === 'none') s.all = true; viewApps(); }, search: s.search, onSearch: v => { s.search = v; refresh(); },
       buttons: [
+        el('button', { class: 'chip' + (s.all ? ' on' : ''), title: 'Auch eigene Apps ohne Postfachzugriff anzeigen, z. B. eine gerade im Entra-Portal angelegte App',
+          onclick: () => { s.all = !s.all; if (!s.all && s.chip === 'none') s.chip = 'all'; viewApps(); } }, (s.all ? '✓ ' : '') + 'Alle eigenen Apps' + (hidden ? ' (+' + hidden + ')' : '')),
         el('button', { class: 'primary', onclick: () => restrictWizard(null) }, '＋ App auf Postfächer einschränken …'),
         el('button', { class: 'outline', onclick: () => viewApps(true) }, '↻'),
       ],
     });
     const refresh = () => {
-      const rows = apps.filter(a => matches(a, s.search, ['displayName', 'appId', r => (r.grants || []).map(g => g.permission).join(' ')]))
-        .filter(a => s.chip === 'all' || appStatus(a)[0] === ({ wide: 'tenantweit', mixed: 'gemischt', scoped: 'eingeschränkt', admin: 'Exchange-Verwaltung' })[s.chip]);
+      const rows = apps.filter(a => s.all || hasMailbox(a))
+        .filter(a => matches(a, s.search, ['displayName', 'appId', r => (r.grants || []).map(g => g.permission).join(' ')]))
+        .filter(a => s.chip === 'all' || appStatus(a)[0] === ({ wide: 'tenantweit', mixed: 'gemischt', scoped: 'eingeschränkt', admin: 'Exchange-Verwaltung', none: 'ohne Postfachrechte' })[s.chip]);
       f.tableSlot.replaceChildren(table({
-        rows, key: a => a.appId, empty: 'Keine Apps mit Postfach-Berechtigungen gefunden.',
+        rows, key: a => a.appId, empty: s.all ? 'Keine Apps gefunden. Gerade angelegt? Mit ↻ neu laden.' : 'Keine Apps mit Postfach-Berechtigungen gefunden. „Alle eigenen Apps“ zeigt auch neue Apps ohne Berechtigungen.',
         columns: [
           { title: 'Anwendung', key: 'displayName' },
           { title: 'Status', text: a => appStatus(a)[0], render: a => { const [t, k, tip] = appStatus(a); const b = badge(t, k); b.title = tip; return b; } },
@@ -264,6 +272,13 @@
         el('div', { class: 'note warn' }, 'Diese App hat noch eine Application Access Policy (Vorgänger von RBAC for Applications). Microsoft empfiehlt, nach der Umstellung auf RBAC die alte Richtlinie zu entfernen.'),
         el('ul', { class: 'list' }, a.policies.map(p => el('li', {}, el('span', { class: 'grow' }, p.restriction + ' · ' + p.scope),
           el('button', { class: 'small danger', onclick: async () => { if (await preview('Application Access Policy entfernen', 'Remove-ApplicationAccessPolicy -Identity ' + q(p.identity) + ' -Confirm:$false', { danger: true, okText: 'Entfernen' })) viewApps(true); } }, 'Entfernen'))))] : null,
+      a.ownTenant ? [el('h3', {}, 'Graph-Berechtigungen (Entra)'),
+        el('div', { class: 'muted' }, 'Andere Graph-Rechte (z. B. User.Read.All) erteilst du im Entra-Portal. Für Postfachzugriff dort ',
+          el('b', {}, 'keine'), ' Mail-/Kalender-Rechte erteilen, denn die gelten für alle Postfächer. Stattdessen hier „Auf Postfächer einschränken“.'),
+        el('div', { style: 'margin-top:6px' }, el('button', { class: 'small outline', onclick: () => {
+          post({ t: 'portal', url: 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/' + encodeURIComponent(a.appId) + '/isMSAApp~/false' });
+          toast('Entra-Portal im Browser-Tab geöffnet');
+        } }, 'API-Berechtigungen im Entra-Portal öffnen'))] : null,
       el('div', { class: 'actions' },
         el('button', { class: 'primary', onclick: () => restrictWizard(a) }, (a.rbac || []).some(isMailboxRole) ? 'Einschränkung bearbeiten …' : 'Auf Postfächer einschränken …'),
         el('button', { class: 'outline', disabled: !a.exoIdentity, title: a.exoIdentity ? '' : 'Erst einschränken – dann ist die App in Exchange angelegt', onclick: () => testDialog(a) }, 'Zugriff testen …'),

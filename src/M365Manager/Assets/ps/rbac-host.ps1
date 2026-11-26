@@ -222,6 +222,25 @@ function ConvertTo-RbacAppAssignment($r) {
     @{ name = "$($r.Name)"; role = "$($r.Role)"; scope = $scope; enabled = [bool]$r.Enabled; app = $isApp }
 }
 
+# Service Principals der App-Registrierungen des eigenen Tenants (keine Microsoft-/Fremd-Apps, keine Managed Identities)
+function Get-RbacOwnApps([string]$TenantId) {
+    if ($TenantId -notmatch '^[0-9a-fA-F-]{36}$') { return @() }
+    $select = '$select=id,appId,displayName,servicePrincipalType,appOwnerOrganizationId&$top=999'
+    $filter = [uri]::EscapeDataString("appOwnerOrganizationId eq $TenantId")
+    $uri = "v1.0/servicePrincipals?`$filter=$filter&$select"
+    $list = [System.Collections.Generic.List[object]]::new()
+    try {
+        while ($uri) { $page = Invoke-M365GraphGet $uri; foreach ($x in $page.value) { $list.Add($x) }; $uri = $page.'@odata.nextLink' }
+    }
+    catch {
+        # Filter nicht unterstützt: alle lesen und hier filtern
+        $list.Clear()
+        $uri = "v1.0/servicePrincipals?$select"
+        while ($uri) { $page = Invoke-M365GraphGet $uri; foreach ($x in $page.value) { if ("$($x.appOwnerOrganizationId)" -eq $TenantId) { $list.Add($x) } }; $uri = $page.'@odata.nextLink' }
+    }
+    @($list | Where-Object { "$($_.servicePrincipalType)" -eq 'Application' })
+}
+
 $script:Ops.apps = {
     Use-RbacService Graph
     Use-RbacService Exchange
@@ -241,15 +260,26 @@ $script:Ops.apps = {
             $uri = $page.'@odata.nextLink'
         }
     }
+    # Alle App-Registrierungen des eigenen Tenants (nur lesend) – auch frisch angelegte ohne jede Berechtigung,
+    # damit sie direkt eingeschränkt werden können. Die Liste blendet sie erst per Umschalter ein.
+    $tid = "$((Get-M365GraphTokenInfo).TenantId)"
+    foreach ($sp in Get-RbacOwnApps $tid) {
+        $key = "$($sp.id)"
+        if ($apps[$key]) { $apps[$key].appId = "$($sp.appId)"; $apps[$key].ownTenant = $true; continue }
+        $apps[$key] = @{ objectId = $key; appId = "$($sp.appId)"; displayName = "$($sp.displayName)"; ownTenant = $true
+            grants = [System.Collections.Generic.List[object]]::new() }
+    }
     # AppId und Exchange-Gegenstück (Service Principal in Exchange) ergänzen
     $exo = @{}
     foreach ($sp in Get-ServicePrincipal) { $exo["$($sp.AppId)"] = $sp }
     $assignments = @(Get-ManagementRoleAssignment -GetEffectiveUsers:$false | Where-Object { "$($_.RoleAssigneeType)" -eq 'ServicePrincipal' })
     $policies = @(try { Get-ApplicationAccessPolicy } catch { @() })
     foreach ($a in $apps.Values) {
-        $sp = Invoke-M365GraphGet "v1.0/servicePrincipals/$($a.objectId)?`$select=appId,appOwnerOrganizationId,servicePrincipalType"
-        $a.appId = "$($sp.appId)"
-        $a.ownTenant = "$($sp.appOwnerOrganizationId)" -eq "$((Get-M365GraphTokenInfo).TenantId)"
+        if (-not $a.appId) {
+            $sp = Invoke-M365GraphGet "v1.0/servicePrincipals/$($a.objectId)?`$select=appId,appOwnerOrganizationId,servicePrincipalType"
+            $a.appId = "$($sp.appId)"
+            $a.ownTenant = "$($sp.appOwnerOrganizationId)" -eq $tid
+        }
         $e = $exo[$a.appId]
         $a.exoName = if ($e) { "$($e.DisplayName)" } else { '' }
         $a.exoIdentity = if ($e) { "$($e.Identity)" } else { '' }
