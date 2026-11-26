@@ -57,6 +57,15 @@ function Join-RbacValue($Value) {
     return "$Value"
 }
 
+# Ja/Nein aus Exchange: kommt je nach Cmdlet als Boolean ODER als Text "True"/"False".
+# Nie [bool]"False" verwenden – das ergibt in PowerShell $true.
+function ConvertTo-RbacBool($Value) {
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [bool]) { return $Value }
+    if ($Value -is [System.Management.Automation.SwitchParameter]) { return $Value.IsPresent }
+    return "$Value".Trim() -eq 'True'
+}
+
 function Get-RbacDate($Value) { if ($Value) { try { ([datetime]$Value).ToString('yyyy-MM-dd HH:mm') } catch { "$Value" } } else { '' } }
 
 # ------------------------------------------------------------------ Lesen
@@ -93,10 +102,10 @@ $script:Ops.roleGroupMembers = {
 $script:Ops.roles = {
     Use-RbacService Exchange
     ,@(Get-ManagementRole | ForEach-Object {
-        $custom = -not $_.IsRootRole -and "$($_.Parent)" -ne ''
+        $custom = -not (ConvertTo-RbacBool $_.IsRootRole) -and "$($_.Parent)" -ne ''
         @{
             name = "$($_.Name)"; type = "$($_.RoleType)"; parent = "$($_.Parent)"; description = "$($_.Description)"
-            custom = [bool]$custom; endUser = [bool]$_.IsEndUserRole; app = "$($_.Name)" -like 'Application *'
+            custom = [bool]$custom; endUser = (ConvertTo-RbacBool $_.IsEndUserRole); app = "$($_.Name)" -like 'Application *'
         }
     })
 }
@@ -116,7 +125,7 @@ $script:Ops.assignments = {
             name = "$($_.Name)"; role = "$($_.Role)"; assignee = "$($_.RoleAssigneeName)"; assigneeType = "$($_.RoleAssigneeType)"
             writeScope = "$($_.RecipientWriteScope)"; customWriteScope = "$($_.CustomRecipientWriteScope)"
             resourceScope = "$($_.CustomResourceScope)"; configScope = "$($_.ConfigWriteScope)"
-            readScope = "$($_.RecipientReadScope)"; enabled = [bool]$_.Enabled; delegating = "$($_.RoleAssignmentDelegationType)"
+            readScope = "$($_.RecipientReadScope)"; enabled = (ConvertTo-RbacBool $_.Enabled); delegating = "$($_.RoleAssignmentDelegationType)"
             created = Get-RbacDate $_.WhenCreated; identity = "$($_.Identity)"
         }
     })
@@ -127,7 +136,7 @@ $script:Ops.scopes = {
     ,@(Get-ManagementScope | ForEach-Object {
         @{
             name = "$($_.Name)"; type = "$($_.ScopeRestrictionType)"; root = "$($_.RecipientRoot)"
-            filter = Join-RbacValue $_.RecipientFilter; exclusive = [bool]$_.Exclusive; isDefault = [bool]$_.IsDefault
+            filter = Join-RbacValue $_.RecipientFilter; exclusive = (ConvertTo-RbacBool $_.Exclusive); isDefault = (ConvertTo-RbacBool $_.IsDefault)
             created = Get-RbacDate $_.WhenCreated
         }
     })
@@ -219,7 +228,7 @@ function ConvertTo-RbacAppAssignment($r) {
              elseif ($r.RecipientAdministrativeUnitScope) { "$($r.RecipientAdministrativeUnitScope)" }
              elseif ($r.RecipientOrganizationalUnitScope) { "$($r.RecipientOrganizationalUnitScope)" }
              else { '' }
-    @{ name = "$($r.Name)"; role = "$($r.Role)"; scope = $scope; enabled = [bool]$r.Enabled; app = $isApp }
+    @{ name = "$($r.Name)"; role = "$($r.Role)"; scope = $scope; enabled = (ConvertTo-RbacBool $r.Enabled); app = $isApp }
 }
 
 # Service Principals der App-Registrierungen des eigenen Tenants (keine Microsoft-/Fremd-Apps, keine Managed Identities)
@@ -320,7 +329,7 @@ $script:Ops.testApp = {
     param($a)
     Use-RbacService Exchange
     ,@(Test-ServicePrincipalAuthorization -Identity $a.identity -Resource $a.resource | ForEach-Object {
-        @{ role = "$($_.RoleName)"; permissions = Join-RbacValue $_.GrantedPermissions; scope = "$($_.AllowedResourceScope)"; scopeType = "$($_.ScopeType)"; inScope = [bool]$_.InScope }
+        @{ role = "$($_.RoleName)"; permissions = Join-RbacValue $_.GrantedPermissions; scope = "$($_.AllowedResourceScope)"; scopeType = "$($_.ScopeType)"; inScope = (ConvertTo-RbacBool $_.InScope) }
     })
 }
 

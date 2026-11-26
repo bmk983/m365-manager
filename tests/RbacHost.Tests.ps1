@@ -1,4 +1,4 @@
-# Tests der RBAC-Hintergrund-PowerShell (Protokoll, Listen, Fehler, Abbruch beim ersten Fehler).
+﻿# Tests der RBAC-Hintergrund-PowerShell (Protokoll, Listen, Fehler, Abbruch beim ersten Fehler).
 # Exchange wird nicht angesprochen – die Cmdlets werden durch Attrappen ersetzt.
 
 BeforeAll {
@@ -30,6 +30,12 @@ function Invoke-M365GraphGet([string]$Uri) {
 function Get-ServicePrincipal { }
 function Get-ManagementRoleAssignment { }
 function Get-ApplicationAccessPolicy { }
+# Exchange liefert InScope als Text – "False" darf nicht als ja gelten
+function Test-ServicePrincipalAuthorization {
+    [pscustomobject]@{ RoleName = 'Application Mail.Read'; GrantedPermissions = 'Mail.Read'; AllowedResourceScope = 'App-Postfaecher'; ScopeType = 'CustomRecipientScope'; InScope = 'False' }
+    [pscustomobject]@{ RoleName = 'Application Mail.Send'; GrantedPermissions = 'Mail.Send'; AllowedResourceScope = 'App-Postfaecher'; ScopeType = 'CustomRecipientScope'; InScope = 'True' }
+    [pscustomobject]@{ RoleName = 'Application Calendars.Read'; GrantedPermissions = 'Calendars.Read'; AllowedResourceScope = 'App-Postfaecher'; ScopeType = 'CustomRecipientScope'; InScope = $false }
+}
 '@
     $src = [IO.File]::ReadAllText($copy).Replace('# ------------------------------------------------------------------ Schleife', $fakes + "`n# ------------------------------------------------------------------ Schleife")
     [IO.File]::WriteAllText($copy, $src, [Text.UTF8Encoding]::new($true))
@@ -60,6 +66,7 @@ function Get-ApplicationAccessPolicy { }
         '{"id":7,"op":"run","script":"Invoke-MgGraphRequest DELETE v1.0/servicePrincipals/x"}'
         '{"id":8,"op":"run","script":"New-Thing -Name Firma-MgmtGruppe"}'
         '{"id":9,"op":"apps","args":{}}'
+        '{"id":10,"op":"testApp","args":{"identity":"sp-new","resource":"aussen@contoso.com"}}'
     )
     $script:RbacSource = Get-Content (Join-Path $PSScriptRoot '..\src\M365Manager\Assets\ps\rbac-host.ps1') -Raw
     $script:RbacJs = Get-Content (Join-Path $PSScriptRoot '..\src\M365Manager\Assets\rbac\rbac.js') -Raw
@@ -69,7 +76,7 @@ AfterAll { Remove-Item $script:Work -Recurse -Force -ErrorAction SilentlyContinu
 
 Describe 'RBAC-Hintergrund-PowerShell' {
     It 'beantwortet jede Anfrage genau einmal' {
-        $script:Replies.Count | Should -Be 9
+        $script:Replies.Count | Should -Be 10
     }
     It 'listet auch eigene Apps ohne Berechtigungen (frisch angelegt), ohne Doppelte und ohne Managed Identities' {
         $r = $script:Replies[8] | ConvertFrom-Json
@@ -85,6 +92,14 @@ Describe 'RBAC-Hintergrund-PowerShell' {
         $mail = $r.data | Where-Object displayName -eq 'Mail-App'
         $mail.grants[0].permission | Should -Be 'Mail.Read'
         $mail.appId | Should -Be 'app-mail'
+    }
+    It 'wertet InScope "False" aus Exchange als nein (nicht als ja)' {
+        $r = $script:Replies[9] | ConvertFrom-Json
+        $r.ok | Should -BeTrue
+        @($r.data | ForEach-Object inScope) | Should -Be @($false, $true, $false)
+    }
+    It 'macht aus Exchange-Ja/Nein nie [bool] eines Textes' {
+        $script:RbacSource | Should -Not -Match '\[bool\]\$(_|r)\.(InScope|Enabled|Exclusive|IsDefault|IsEndUserRole)'
     }
     It 'liefert auch eine einzelne Zeile als Liste' {
         $script:Replies[0] | Should -Match '"data":\[\{'
