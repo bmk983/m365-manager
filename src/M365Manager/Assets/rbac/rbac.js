@@ -65,9 +65,44 @@
 
   // ---------------------------------------------------------------- Dialoge
   function closeModal() { $('modal').hidden = true; $('dialog').replaceChildren(); }
+
+  // Dialoggröße: per Ecke ziehbar, wird gemerkt (nur in diesem Browser-Profil der App); Doppelklick auf den Titel maximiert
+  const SIZE_KEY = 'm365m.rbac.dialogSize';
+  const readSize = () => { try { return JSON.parse(localStorage.getItem(SIZE_KEY) || 'null'); } catch { return null; } };
+  const writeSize = v => { try { v ? localStorage.setItem(SIZE_KEY, JSON.stringify(v)) : localStorage.removeItem(SIZE_KEY); } catch { } };
+  let sizeWatch = null;
+  function applyDialogSize(d, small) {
+    d.classList.toggle('fit', !!small);   // kurze Rückfragen: kompakt, ohne gemerkte Größe
+    const s = small ? null : readSize();
+    d.classList.toggle('max', !!(s && s.max));
+    d.style.width = s && s.w ? s.w + 'px' : '';
+    d.style.height = s && s.h ? s.h + 'px' : '';
+    if (!sizeWatch && 'ResizeObserver' in window) {
+      let ready = false;
+      sizeWatch = new ResizeObserver(() => {
+        if (!ready || $('modal').hidden || d.classList.contains('max') || d.classList.contains('fit')) return;
+        if (d.style.width || d.style.height) writeSize({ w: Math.round(d.offsetWidth), h: Math.round(d.offsetHeight) });
+      });
+      sizeWatch.observe(d);
+      setTimeout(() => { ready = true; }, 0);
+    }
+  }
+  function toggleMax(d) {
+    const max = !d.classList.contains('max');
+    const s = readSize() || {};
+    writeSize(max ? { ...s, max: true } : (s.w ? { w: s.w, h: s.h } : null));
+    applyDialogSize(d);
+  }
+
   function openModal(title, body, buttons) {
     const d = $('dialog');
-    d.replaceChildren(el('div', { class: 'dhead' }, title), el('div', { class: 'dbody' }, body), el('div', { class: 'dfoot' }, buttons));
+    const small = !(body instanceof Element && body.querySelector('.steps, pre, .pick, table, input, select'));
+    const head = small ? el('div', { class: 'dhead' }, el('span', { class: 't' }, title))
+      : el('div', { class: 'dhead', title: 'Doppelklick: maximieren / zurück', ondblclick: e => { if (!e.target.closest('button')) toggleMax(d); } }, el('span', { class: 't' }, title),
+        el('button', { class: 'outline', title: 'Maximieren / zurück', onclick: () => toggleMax(d) }, '⤢'),
+        el('button', { class: 'outline', title: 'Standardgröße', onclick: () => { writeSize(null); applyDialogSize(d); } }, '↺'));
+    d.replaceChildren(head, el('div', { class: 'dbody' }, body), el('div', { class: 'dfoot' }, buttons));
+    applyDialogSize(d, small);
     $('modal').hidden = false;
     return d;
   }
