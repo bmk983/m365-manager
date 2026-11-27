@@ -515,6 +515,11 @@
 
     const id = el('input', { value: w.au, placeholder: '… oder Objekt-ID aus Entra einfügen (GUID)', style: 'width:100%;margin-top:8px' });
     id.onchange = () => { w.au = id.value.trim(); w.auSel = auMatch(w.auList, w.au); render(); };
+    id.oninput = () => {
+      const v = id.value.trim();
+      if (w.auError) { w.au = v; next.disabled = !isGuid(v); }        // nicht prüfbar: Weiter sofort bei gültiger ID
+      else if (auMatch(w.auList, v)) id.onchange();                   // bekannte AU: sofort bestätigen
+    };
     body.append(id);
 
     if (w.auSel) {

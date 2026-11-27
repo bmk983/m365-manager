@@ -37,7 +37,7 @@ function Test-ServicePrincipalAuthorization {
     [pscustomobject]@{ RoleName = 'Application Calendars.Read'; GrantedPermissions = 'Calendars.Read'; AllowedResourceScope = 'App-Postfaecher'; ScopeType = 'CustomRecipientScope'; InScope = $false }
 }
 # Verwaltungseinheiten (eine einzelne AU – muss trotzdem als Liste ankommen)
-function Get-AdministrativeUnit { [pscustomobject]@{ Name = 'au-name'; DisplayName = 'PM Alle'; ExternalDirectoryObjectId = '11111111-2222-3333-4444-555555555555'; Guid = 'g-au'; DistinguishedName = 'CN=au,DC=x'; Identity = 'au-name' } }
+function Get-AdministrativeUnit { [CmdletBinding()] param([string]$Identity) [pscustomobject]@{ Name = 'au-name'; DisplayName = 'PM Alle'; ExternalDirectoryObjectId = '11111111-2222-3333-4444-555555555555'; Guid = 'g-au'; DistinguishedName = 'CN=au,DC=x'; Identity = 'au-name' } }
 function Get-Recipient([string]$Filter, $ResultSize) {
     if ($Filter -eq "AdministrativeUnits -eq 'CN=au,DC=x'") { [pscustomobject]@{ DisplayName = 'Anna'; PrimarySmtpAddress = 'anna@contoso.com'; RecipientTypeDetails = 'UserMailbox' } }
     else { throw "unerwarteter Filter: $Filter" }

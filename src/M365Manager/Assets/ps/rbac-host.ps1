@@ -167,7 +167,7 @@ $script:Ops.findGroups = {
 # Verwaltungseinheiten, wie Exchange sie kennt (nur lesend). Neue AUs erscheinen hier erst nach dem Abgleich aus Entra.
 $script:Ops.adminUnits = {
     Use-RbacService Exchange
-    ,@(Get-AdministrativeUnit -ResultSize Unlimited | ForEach-Object {
+    ,@(Get-AdministrativeUnit | ForEach-Object {
         @{
             name = "$($_.Name)"; displayName = "$(if ($_.DisplayName) { $_.DisplayName } else { $_.Name })"
             id = "$($_.ExternalDirectoryObjectId)"; guid = "$($_.Guid)"; dn = "$($_.DistinguishedName)"; identity = "$($_.Identity)"
