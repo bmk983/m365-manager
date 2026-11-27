@@ -382,8 +382,12 @@
                 w.group = g;
                 if (!w.scopeName) w.scopeName = ('App-' + w.app.displayName + '-Postfaecher').replace(/[^\w.-]+/g, '-').replace(/-+/g, '-');
                 render();
-              } }, g.displayName || g.name, el('div', { class: 'muted' }, g.type + ' · ' + g.members + ' Mitglieder' + (g.smtp ? ' · ' + g.smtp : '')))));
-              if (!found.length) pick.replaceChildren(el('div', { class: 'muted' }, 'Keine Gruppe gefunden.'));
+              } }, g.displayName || g.name, groupHint(g) ? el('span', {}, ' ', badge(groupHint(g).short, 'warn')) : null,
+                el('div', { class: 'muted' }, g.type + ' · ' + g.members + ' Mitglieder' + (g.smtp ? ' · ' + g.smtp : '')))));
+              if (!found.length) pick.replaceChildren(el('div', { class: 'note warn' }, el('b', {}, 'Keine Gruppe gefunden. '),
+                'Exchange kennt nur mail-aktivierte Gruppen zuverlässig. Reine Sicherheitsgruppen und dynamische Entra-Gruppen sind hier meist nicht sichtbar und eignen sich nicht für den Bereich. ',
+                'Für „alle Benutzer nach Regel“ besser eine dynamische Verwaltungseinheit (Admin Unit) nehmen. ',
+                el('button', { class: 'small outline', onclick: () => { w.mode = 'au'; render(); } }, 'Zur Verwaltungseinheit')));
             } catch (e) { pick.replaceChildren(el('div', { class: 'muted' }, e.message)); }
           }, 350); });
           const name = el('input', { value: w.scopeName, style: 'width:100%' });
@@ -391,6 +395,8 @@
           body.append(el('label', {}, 'Gruppe'), input, pick);
           if (w.group) {
             const prev = el('div');
+            const hint = groupHint(w.group);
+            if (hint) body.append(el('div', { class: 'note warn' }, el('b', {}, hint.short + ': '), hint.text, ' Mit „Postfächer im Bereich anzeigen“ prüfen, ob Exchange die Mitglieder findet.'));
             body.append(el('div', { class: 'note ok' }, 'Gruppe: ', el('b', {}, w.group.displayName || w.group.name), ' · ' + w.group.members + ' Mitglieder ',
               el('button', { class: 'small outline', onclick: () => previewMembers(groupFilter(w.group), prev) }, 'Postfächer im Bereich anzeigen')), prev,
               el('label', {}, 'Name des neuen Bereichs (Management Scope)'), name);
@@ -406,10 +412,7 @@
             chosen && chosen.filter ? el('div', { style: 'margin-top:6px' }, el('button', { class: 'small outline', onclick: () => previewMembers(chosen.filter, prev) }, 'Postfächer im Bereich anzeigen'), prev) : null);
           next.disabled = !w.existingScope;
         } else {
-          const id = el('input', { value: w.au, placeholder: 'Objekt-ID der Verwaltungseinheit (GUID)', style: 'width:100%' });
-          id.oninput = () => { w.au = id.value.trim(); next.disabled = !/^[0-9a-f-]{36}$/i.test(w.au); };
-          body.append(el('label', {}, 'Verwaltungseinheit'), id, el('div', { class: 'muted', style: 'margin-top:6px' }, 'Zu finden im Entra Admin Center unter Rollen und Administratoren → Verwaltungseinheiten → Objekt-ID.'));
-          next.disabled = !/^[0-9a-f-]{36}$/i.test(w.au);
+          auStep(w, body, next, render);
         }
         next.onclick = () => { w.step = 3; render(); };
       }
@@ -476,6 +479,67 @@
       openModal('App auf Postfächer einschränken', body, foot);
     };
     render();
+  }
+
+  // Gruppentypen, deren Mitglieder Exchange im Bereich (MemberOfGroup) nicht verlässlich auswertet
+  function groupHint(g) {
+    const t = String(g.type || '');
+    if (t === 'GroupMailbox') return { short: 'Microsoft-365-Gruppe', text: 'Deren Mitglieder erkennt der Bereich meist nicht.' };
+    if (t === 'RoomList') return { short: 'Raumliste', text: 'Enthält Räume, keine Benutzerpostfächer.' };
+    if (t && !/^Mail/.test(t)) return { short: 'nicht mail-aktiviert', text: 'Für reine Sicherheitsgruppen ist der Bereich nicht dokumentiert und oft leer.' };
+    return null;
+  }
+
+  const isGuid = v => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || '').trim());
+  const auKey = u => u.id || u.name;
+  const auMatch = (list, v) => v ? (list || []).find(u => [u.id, u.name, u.guid].some(x => x && x.toLowerCase() === v.toLowerCase())) || null : null;
+
+  // Schritt „Postfächer“ mit Verwaltungseinheit: zeigt, ob Exchange die AU schon kennt (der Abgleich aus Entra dauert).
+  function auStep(w, body, next, render) {
+    const reload = async () => {
+      w.auList = null; w.auError = ''; render();
+      try { w.auList = await call('adminUnits'); }
+      catch (e) { w.auList = []; w.auError = e.message; }
+      w.auSel = auMatch(w.auList, w.au);
+      render();
+    };
+    if (w.auList === undefined) { w.auList = null; setTimeout(reload, 0); }
+    body.append(el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, el('label', { class: 'grow', style: 'margin:0' }, 'Verwaltungseinheit'),
+      el('button', { class: 'small outline', onclick: reload, disabled: w.auList === null }, 'Neu laden')));
+    if (w.auList === null) { body.append(el('div', { class: 'muted' }, 'Lese Verwaltungseinheiten aus Exchange …')); next.disabled = true; return; }
+
+    if (w.auError) body.append(el('div', { class: 'note warn' }, 'Verwaltungseinheiten konnten nicht gelesen werden: ' + w.auError + ' – die Objekt-ID kann trotzdem eingetragen werden, wird dann aber nicht geprüft.'));
+    else if (!w.auList.length) body.append(el('div', { class: 'note warn' }, 'Exchange kennt noch keine Verwaltungseinheit. Eine neu angelegte AU erscheint hier erst nach dem Abgleich aus Entra (meist Minuten, manchmal länger) – dann „Neu laden“.'));
+    else body.append(el('div', { class: 'pick' }, w.auList.map(u => el('div', { class: w.auSel && auKey(w.auSel) === auKey(u) ? 'sel' : '', onclick: () => { w.auSel = u; w.au = auKey(u); render(); } },
+      u.displayName, el('div', { class: 'muted mono' }, u.id || u.name)))));
+
+    const id = el('input', { value: w.au, placeholder: '… oder Objekt-ID aus Entra einfügen (GUID)', style: 'width:100%;margin-top:8px' });
+    id.onchange = () => { w.au = id.value.trim(); w.auSel = auMatch(w.auList, w.au); render(); };
+    body.append(id);
+
+    if (w.auSel) {
+      const prev = el('div');
+      body.append(el('div', { class: 'note ok' }, '✓ Exchange kennt die Verwaltungseinheit: ', el('b', {}, w.auSel.displayName), el('span', { class: 'muted mono' }, '  ' + (w.auSel.id || w.auSel.name) + '  '),
+        el('button', { class: 'small outline', onclick: () => previewAuMembers(w.auSel, prev) }, 'Postfächer anzeigen')), prev,
+        el('div', { class: 'muted' }, 'Bei dynamischen Verwaltungseinheiten berechnet Entra die Mitglieder mit Verzögerung; bis Exchange sie kennt, kann es zusätzlich dauern.'));
+    } else if (w.au && !w.auError) {
+      body.append(el('div', { class: 'note warn' }, isGuid(w.au)
+        ? 'Exchange kennt diese Verwaltungseinheit (noch) nicht. Neu angelegte AUs erscheinen erst nach dem Abgleich aus Entra – später „Neu laden“. Prüfe auch, ob es die Objekt-ID der Verwaltungseinheit ist (nicht die einer Gruppe).'
+        : 'Bitte die Objekt-ID (GUID) der Verwaltungseinheit eintragen.'));
+    } else if (!w.au) {
+      body.append(el('div', { class: 'muted', style: 'margin-top:6px' }, 'Entra Admin Center → Rollen und Administratoren → Verwaltungseinheiten (Admin units) → Objekt-ID.'));
+    }
+    next.disabled = !(w.auSel || (w.auError && isGuid(w.au)));
+  }
+
+  async function previewAuMembers(u, slot) {
+    try {
+      const res = await busy('Ermittle Postfächer der Verwaltungseinheit …', () => call('adminUnitMembers', { dn: u.dn, guid: u.guid }));
+      const items = res.items || [];
+      slot.replaceChildren(el('div', { class: 'note' + (items.length ? '' : ' warn') }, items.length + (res.truncated ? '+' : '') + ' Empfänger in der Verwaltungseinheit' +
+        (items.length ? ':' : ' – bei einer neuen oder dynamischen AU ist die Mitgliedschaft evtl. noch nicht bei Exchange angekommen.'),
+        items.length ? el('div', { class: 'pick' }, items.map(i => el('div', {}, i.name, el('span', { class: 'muted' }, '  ' + i.smtp + ' · ' + i.type)))) : null));
+    } catch (e) { slot.replaceChildren(el('div', { class: 'note warn' }, 'Mitglieder konnten nicht ermittelt werden: ' + e.message + ' – der Zugriffstest im letzten Schritt zeigt es trotzdem.')); }
   }
 
   // Filter: direkte Mitglieder einer Gruppe (Distinguished Name, Apostroph verdoppelt)

@@ -36,6 +36,12 @@ function Test-ServicePrincipalAuthorization {
     [pscustomobject]@{ RoleName = 'Application Mail.Send'; GrantedPermissions = 'Mail.Send'; AllowedResourceScope = 'App-Postfaecher'; ScopeType = 'CustomRecipientScope'; InScope = 'True' }
     [pscustomobject]@{ RoleName = 'Application Calendars.Read'; GrantedPermissions = 'Calendars.Read'; AllowedResourceScope = 'App-Postfaecher'; ScopeType = 'CustomRecipientScope'; InScope = $false }
 }
+# Verwaltungseinheiten (eine einzelne AU – muss trotzdem als Liste ankommen)
+function Get-AdministrativeUnit { [pscustomobject]@{ Name = 'au-name'; DisplayName = 'PM Alle'; ExternalDirectoryObjectId = '11111111-2222-3333-4444-555555555555'; Guid = 'g-au'; DistinguishedName = 'CN=au,DC=x'; Identity = 'au-name' } }
+function Get-Recipient([string]$Filter, $ResultSize) {
+    if ($Filter -eq "AdministrativeUnits -eq 'CN=au,DC=x'") { [pscustomobject]@{ DisplayName = 'Anna'; PrimarySmtpAddress = 'anna@contoso.com'; RecipientTypeDetails = 'UserMailbox' } }
+    else { throw "unerwarteter Filter: $Filter" }
+}
 '@
     $src = [IO.File]::ReadAllText($copy).Replace('# ------------------------------------------------------------------ Schleife', $fakes + "`n# ------------------------------------------------------------------ Schleife")
     [IO.File]::WriteAllText($copy, $src, [Text.UTF8Encoding]::new($true))
@@ -67,6 +73,8 @@ function Test-ServicePrincipalAuthorization {
         '{"id":8,"op":"run","script":"New-Thing -Name Firma-MgmtGruppe"}'
         '{"id":9,"op":"apps","args":{}}'
         '{"id":10,"op":"testApp","args":{"identity":"sp-new","resource":"aussen@contoso.com"}}'
+        '{"id":11,"op":"adminUnits","args":{}}'
+        '{"id":12,"op":"adminUnitMembers","args":{"dn":"CN=au,DC=x","guid":"g-au"}}'
     )
     $script:RbacSource = Get-Content (Join-Path $PSScriptRoot '..\src\M365Manager\Assets\ps\rbac-host.ps1') -Raw
     $script:RbacJs = Get-Content (Join-Path $PSScriptRoot '..\src\M365Manager\Assets\rbac\rbac.js') -Raw
@@ -76,7 +84,20 @@ AfterAll { Remove-Item $script:Work -Recurse -Force -ErrorAction SilentlyContinu
 
 Describe 'RBAC-Hintergrund-PowerShell' {
     It 'beantwortet jede Anfrage genau einmal' {
-        $script:Replies.Count | Should -Be 10
+        $script:Replies.Count | Should -Be 12
+    }
+    It 'listet Verwaltungseinheiten aus Exchange (auch eine einzelne als Liste)' {
+        $script:Replies[10] | Should -Match '"data":\[\{'
+        $u = ($script:Replies[10] | ConvertFrom-Json).data[0]
+        $u.displayName | Should -Be 'PM Alle'
+        $u.id | Should -Be '11111111-2222-3333-4444-555555555555'
+        $u.dn | Should -Be 'CN=au,DC=x'
+    }
+    It 'zeigt die Postfächer einer Verwaltungseinheit' {
+        $r = $script:Replies[11] | ConvertFrom-Json
+        $r.ok | Should -BeTrue
+        $r.data.items[0].smtp | Should -Be 'anna@contoso.com'
+        $r.data.truncated | Should -BeFalse
     }
     It 'listet auch eigene Apps ohne Berechtigungen (frisch angelegt), ohne Doppelte und ohne Managed Identities' {
         $r = $script:Replies[8] | ConvertFrom-Json

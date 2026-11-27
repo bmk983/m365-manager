@@ -164,6 +164,29 @@ $script:Ops.findGroups = {
     })
 }
 
+# Verwaltungseinheiten, wie Exchange sie kennt (nur lesend). Neue AUs erscheinen hier erst nach dem Abgleich aus Entra.
+$script:Ops.adminUnits = {
+    Use-RbacService Exchange
+    ,@(Get-AdministrativeUnit -ResultSize Unlimited | ForEach-Object {
+        @{
+            name = "$($_.Name)"; displayName = "$(if ($_.DisplayName) { $_.DisplayName } else { $_.Name })"
+            id = "$($_.ExternalDirectoryObjectId)"; guid = "$($_.Guid)"; dn = "$($_.DistinguishedName)"; identity = "$($_.Identity)"
+        }
+    } | Sort-Object { $_.displayName })
+}
+
+# Postfächer einer Verwaltungseinheit (nur lesend, Anzeige auf 500 begrenzt)
+$script:Ops.adminUnitMembers = {
+    param($a)
+    Use-RbacService Exchange
+    $max = 500
+    $key = "$(if ($a.dn) { $a.dn } else { $a.guid })".Replace("'", "''")
+    $items = @(Get-Recipient -Filter "AdministrativeUnits -eq '$key'" -ResultSize ($max + 1) | ForEach-Object {
+        @{ name = "$($_.DisplayName)"; smtp = "$($_.PrimarySmtpAddress)"; type = "$($_.RecipientTypeDetails)" }
+    })
+    @{ truncated = $items.Count -gt $max; items = @($items | Select-Object -First $max) }
+}
+
 $script:Ops.findRecipients = {
     param($a)
     Use-RbacService Exchange
