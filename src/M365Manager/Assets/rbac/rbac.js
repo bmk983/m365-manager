@@ -18,6 +18,9 @@
     for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) e.append(c instanceof Node ? c : document.createTextNode(String(c)));
     return e;
   };
+  // Für direkte DOM-Aufrufe (append/replaceChildren): null/undefined/false weglassen –
+  // der Browser würde sie sonst als Text „null“, „undefined“, „false“ einfügen.
+  const nodes = (...xs) => xs.flat(Infinity).filter(x => x !== null && x !== undefined && x !== false);
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   const q = s => "'" + String(s ?? '').replace(/'/g, "''") + "'";            // PowerShell-String in einfachen Anführungszeichen
   const qd = s => '"' + String(s ?? '').replace(/[`"$]/g, c => '`' + c) + '"';  // PowerShell-String in doppelten Anführungszeichen
@@ -139,8 +142,8 @@
           const text = typeof res === 'string' ? res.trim() : '';
           const failed = /^FEHLER:/m.test(text);
           ran = !failed;
-          out.replaceChildren(el('div', { class: 'note ' + (failed ? 'bad' : 'ok') }, failed ? 'Teilweise fehlgeschlagen – siehe Ausgabe.' : '✓ Ausgeführt.',
-            text ? null : el('span', { class: 'muted' }, ' (keine Ausgabe)')), text ? el('pre', { class: 'code out' }, text) : null);
+          out.replaceChildren(...nodes(el('div', { class: 'note ' + (failed ? 'bad' : 'ok') }, failed ? 'Teilweise fehlgeschlagen – siehe Ausgabe.' : '✓ Ausgeführt.',
+            text ? null : el('span', { class: 'muted' }, ' (keine Ausgabe)')), text ? el('pre', { class: 'code out' }, text) : null));
         } catch (e) {
           out.replaceChildren(el('div', { class: 'note bad' }, 'Fehlgeschlagen: ' + e.message));
         }
@@ -366,7 +369,7 @@
             if (!found.length) pick.replaceChildren(el('div', { class: 'muted' }, 'Nichts gefunden.'));
           } catch (e) { pick.replaceChildren(el('div', { class: 'muted' }, e.message)); }
         }, 350); });
-        body.append(input, pick, w.app ? el('div', { class: 'note ok' }, 'Gewählt: ', el('b', {}, w.app.displayName), ' (' + w.app.appId + ')') : null);
+        body.append(...nodes(input, pick, w.app ? el('div', { class: 'note ok' }, 'Gewählt: ', el('b', {}, w.app.displayName), ' (' + w.app.appId + ')') : null));
         next.disabled = !w.app;
         next.onclick = () => { w.step = 1; render(); };
         setTimeout(() => input.focus(), 0);
@@ -444,8 +447,8 @@
           sel.onchange = () => { w.existingScope = sel.value; render(); };
           const prev = el('div');
           const chosen = scopes.find(s => s.name === w.existingScope);
-          body.append(el('label', {}, 'Bereich'), sel,
-            chosen && chosen.filter ? el('div', { style: 'margin-top:6px' }, el('button', { class: 'small outline', onclick: () => previewMembers(chosen.filter, prev) }, 'Postfächer im Bereich anzeigen'), prev) : null);
+          body.append(...nodes(el('label', {}, 'Bereich'), sel,
+            chosen && chosen.filter ? el('div', { style: 'margin-top:6px' }, el('button', { class: 'small outline', onclick: () => previewMembers(chosen.filter, prev) }, 'Postfächer im Bereich anzeigen'), prev) : null));
           next.disabled = !w.existingScope;
         } else {
           auStep(w, body, next, render);
@@ -503,14 +506,14 @@
           }
         }
         const script = lines.join('\n');
-        body.append(
+        body.append(...nodes(
           el('div', { class: 'note' }, 'Diese Befehle legen die Einschränkung in Exchange an. ', el('b', {}, 'Noch ändert sich am Zugriff nichts'),
             ', solange die App ihre tenantweiten Entra-Rechte behält – die werden im letzten Schritt entfernt, wenn der Test passt.'),
           removals.length ? el('div', { class: 'note warn' }, el('b', {}, 'Bereich wird gewechselt: '),
             'Die App hat diese Rollen schon mit einem anderen Bereich. Zuweisungen addieren sich – deshalb werden zuerst die neuen angelegt und danach die bisherigen entfernt. ',
             'Bis Exchange die Änderung übernommen hat, kann kurz noch der alte Bereich gelten.') : null,
           el('pre', { class: 'code' }, script),
-          el('div', { class: 'muted' }, 'Exchange übernimmt neue Zuweisungen mit Verzögerung (meist 30 Minuten, bis zu 2 Stunden).'));
+          el('div', { class: 'muted' }, 'Exchange übernimmt neue Zuweisungen mit Verzögerung (meist 30 Minuten, bis zu 2 Stunden).')));
         next.textContent = 'Befehle ausführen …';
         next.onclick = async () => {
           if (await preview('App einschränken: ' + a.displayName, script, { okText: 'Ausführen' })) {
