@@ -135,11 +135,12 @@
         run.disabled = true; close.disabled = true; area.readOnly = true;
         out.replaceChildren(el('div', { class: 'note' }, 'Wird ausgeführt …'));
         try {
-          const text = await runScript(area.value);
+          const res = await runScript(area.value);
+          const text = typeof res === 'string' ? res.trim() : '';
           const failed = /^FEHLER:/m.test(text);
           ran = !failed;
-          out.replaceChildren(el('div', { class: 'note ' + (failed ? 'bad' : 'ok') }, failed ? 'Teilweise fehlgeschlagen – siehe Ausgabe.' : '✓ Ausgeführt.'),
-            text ? el('pre', { class: 'code out' }, text) : null);
+          out.replaceChildren(el('div', { class: 'note ' + (failed ? 'bad' : 'ok') }, failed ? 'Teilweise fehlgeschlagen – siehe Ausgabe.' : '✓ Ausgeführt.',
+            text ? null : el('span', { class: 'muted' }, ' (keine Ausgabe)')), text ? el('pre', { class: 'code out' }, text) : null);
         } catch (e) {
           out.replaceChildren(el('div', { class: 'note bad' }, 'Fehlgeschlagen: ' + e.message));
         }
@@ -460,26 +461,54 @@
           lines.push('# 1. App in Exchange Online bekannt machen');
           lines.push('New-ServicePrincipal -AppId ' + q(a.appId) + ' -ObjectId ' + q(a.objectId) + ' -DisplayName ' + q(a.displayName));
         }
-        let scopeArg;
+        let scopeArg, target;
         if (w.mode === 'group') {
           lines.push('', '# 2. Bereich: nur die direkten Mitglieder der Gruppe „' + (w.group.displayName || w.group.name) + '“');
           lines.push('New-ManagementScope -Name ' + q(w.scopeName.trim()) + ' -RecipientRestrictionFilter ' + qd(groupFilter(w.group)));
           scopeArg = '-CustomResourceScope ' + q(w.scopeName.trim());
+          target = { type: 'custom', label: w.scopeName.trim(), keys: [w.scopeName.trim()] };
         } else if (w.mode === 'scope') {
           scopeArg = '-CustomResourceScope ' + q(w.existingScope);
+          target = { type: 'custom', label: w.existingScope, keys: [w.existingScope] };
         } else {
           scopeArg = '-RecipientAdministrativeUnitScope ' + q(w.au);
+          const u = w.auSel || {};
+          target = { type: 'au', label: 'Verwaltungseinheit ' + (u.displayName || w.au), keys: [w.au, u.id, u.name, u.guid, u.displayName, u.identity] };
         }
+        const keys = new Set(target.keys.filter(Boolean).map(k => String(k).toLowerCase()));
+        const scopeType = r => r.scopeType || (r.scope ? 'custom' : 'org');
+        const isTarget = r => scopeType(r) === target.type && keys.has(String(r.scope || '').toLowerCase());
+        const where = r => scopeType(r) === 'org' ? 'ganze Organisation' : scopeType(r) === 'au' ? 'Verwaltungseinheit ' + r.scope : 'Bereich ' + r.scope;
+        const newName = role => (a.displayName + '-' + role.replace(/^Application /, '') + '-' + target.label).replace(/[^\w.-]+/g, '-').replace(/-+/g, '-').slice(0, 64);
+
         lines.push('', '# 3. Rollen nur für diesen Bereich zuweisen');
-        const existing = new Set((a.rbac || []).map(r => r.role));
+        const removals = [];
         for (const role of [...w.roles].sort()) {
-          if (existing.has(role)) lines.push('# ' + role + ': bereits zugewiesen (' + ((a.rbac || []).find(r => r.role === role).scope || 'ganze Organisation') + ')');
-          else lines.push('New-ManagementRoleAssignment -App ' + q(a.objectId) + ' -Role ' + q(role) + ' ' + scopeArg);
+          const current = (a.rbac || []).filter(r => r.role === role);
+          const keep = current.find(isTarget);
+          if (keep) lines.push('# ' + role + ': bereits für diesen Bereich zugewiesen');
+          else if (!current.length) lines.push('New-ManagementRoleAssignment -App ' + q(a.objectId) + ' -Role ' + q(role) + ' ' + scopeArg);
+          else {
+            lines.push('# ' + role + ': bisher ' + current.map(where).join(', ') + ' → neu nur ' + target.label);
+            lines.push('New-ManagementRoleAssignment -Name ' + q(newName(role)) + ' -App ' + q(a.objectId) + ' -Role ' + q(role) + ' ' + scopeArg);
+          }
+          // Andere Zuweisungen derselben Rolle gelten weiter (sie addieren sich) – daher entfernen
+          for (const r of current) if (r !== keep && r.name) removals.push({ r, role });
+        }
+        if (removals.length) {
+          lines.push('', '# 4. Bisherige Zuweisungen mit anderem Bereich entfernen (erst nachdem die neuen angelegt sind)');
+          for (const { r, role } of removals) {
+            lines.push('# ' + role + ' – ' + where(r));
+            lines.push('Remove-ManagementRoleAssignment -Identity ' + q(r.name) + ' -Confirm:$false');
+          }
         }
         const script = lines.join('\n');
         body.append(
           el('div', { class: 'note' }, 'Diese Befehle legen die Einschränkung in Exchange an. ', el('b', {}, 'Noch ändert sich am Zugriff nichts'),
             ', solange die App ihre tenantweiten Entra-Rechte behält – die werden im letzten Schritt entfernt, wenn der Test passt.'),
+          removals.length ? el('div', { class: 'note warn' }, el('b', {}, 'Bereich wird gewechselt: '),
+            'Die App hat diese Rollen schon mit einem anderen Bereich. Zuweisungen addieren sich – deshalb werden zuerst die neuen angelegt und danach die bisherigen entfernt. ',
+            'Bis Exchange die Änderung übernommen hat, kann kurz noch der alte Bereich gelten.') : null,
           el('pre', { class: 'code' }, script),
           el('div', { class: 'muted' }, 'Exchange übernimmt neue Zuweisungen mit Verzögerung (meist 30 Minuten, bis zu 2 Stunden).'));
         next.textContent = 'Befehle ausführen …';

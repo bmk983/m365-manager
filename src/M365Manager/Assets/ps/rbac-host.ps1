@@ -218,7 +218,7 @@ $script:Ops.commandLookup = {
     param($a)
     Use-RbacService Exchange
     ,@(Get-ManagementRole -Cmdlet $a.cmdlet | ForEach-Object {
-        @{ name = "$($_.Name)"; type = "$($_.RoleType)"; custom = -not $_.IsRootRole -and "$($_.Parent)" -ne ''; description = "$($_.Description)" }
+        @{ name = "$($_.Name)"; type = "$($_.RoleType)"; custom = -not (ConvertTo-RbacBool $_.IsRootRole) -and "$($_.Parent)" -ne ''; description = "$($_.Description)" }
     })
 }
 
@@ -246,12 +246,13 @@ function Get-RbacResourceRoles {
 # (z. B. per Exchange.ManageAsApp, Bereich = Schreibbereich). Leerer Bereich = ganze Organisation.
 function ConvertTo-RbacAppAssignment($r) {
     $isApp = "$($r.Role)" -like 'Application *'
-    $scope = if ($isApp) { "$($r.CustomResourceScope)" }
+    $scope = if ($isApp) { if ($r.RecipientAdministrativeUnitScope) { "$($r.RecipientAdministrativeUnitScope)" } else { "$($r.CustomResourceScope)" } }
              elseif ($r.CustomRecipientWriteScope) { "$($r.CustomRecipientWriteScope)" }
              elseif ($r.RecipientAdministrativeUnitScope) { "$($r.RecipientAdministrativeUnitScope)" }
              elseif ($r.RecipientOrganizationalUnitScope) { "$($r.RecipientOrganizationalUnitScope)" }
              else { '' }
-    @{ name = "$($r.Name)"; role = "$($r.Role)"; scope = $scope; enabled = (ConvertTo-RbacBool $r.Enabled); app = $isApp }
+    $scopeType = if ($r.RecipientAdministrativeUnitScope) { 'au' } elseif ($scope) { 'custom' } else { 'org' }
+    @{ name = "$($r.Name)"; role = "$($r.Role)"; scope = $scope; scopeType = $scopeType; enabled = (ConvertTo-RbacBool $r.Enabled); app = $isApp }
 }
 
 # Service Principals der App-Registrierungen des eigenen Tenants (keine Microsoft-/Fremd-Apps, keine Managed Identities)
@@ -377,7 +378,8 @@ $script:Ops.run = {
         $lines.Add("FEHLER: $($_.Exception.Message)")
         $lines.Add('Abgebrochen – folgende Befehle wurden nicht mehr ausgeführt.')
     }
-    @{ output = ($lines | Out-String -Width 220).TrimEnd() }
+    $text = $lines | Out-String -Width 220
+    @{ output = if ($null -eq $text) { '' } else { "$text".TrimEnd() } }
 }
 
 # ------------------------------------------------------------------ Schleife

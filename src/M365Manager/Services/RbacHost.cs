@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -49,7 +49,7 @@ public sealed class RbacHost : IDisposable
     {
         Log.Write("RBAC ausführen: " + script.Replace("\r", " ").Replace("\n", " ⏎ "));
         var data = await SendAsync(new JsonObject { ["op"] = "run", ["script"] = script }, TimeSpan.FromMinutes(15));
-        return data?["output"]?.GetValue<string>() ?? "";
+        return data?["output"] is JsonValue v && v.TryGetValue<string>(out var text) ? text : "";
     }
 
     private async Task<JsonNode?> SendAsync(JsonObject request, TimeSpan timeout)

@@ -27,8 +27,12 @@ function Invoke-M365GraphGet([string]$Uri) {
     }
     throw "unerwartete Graph-Anfrage: $Uri"
 }
-function Get-ServicePrincipal { }
-function Get-ManagementRoleAssignment { }
+function Get-ServicePrincipal { [pscustomobject]@{ AppId = 'app-mail'; Name = 'exo-mail'; Identity = 'exo-mail'; DisplayName = 'Mail-App' } }
+# Mail-App: eine Rolle mit Verwaltungseinheit, eine mit eigenem Bereich
+function Get-ManagementRoleAssignment {
+    [pscustomobject]@{ Name = 'z-au'; Role = 'Application Mail.Read'; RoleAssigneeType = 'ServicePrincipal'; RoleAssigneeName = 'exo-mail'; RoleAssignee = 'exo-mail'; CustomResourceScope = $null; RecipientAdministrativeUnitScope = '8a74f903-029c-4b8a-8cd4-bbd96458fe89'; Enabled = 'True' }
+    [pscustomobject]@{ Name = 'z-scope'; Role = 'Application Mail.Send'; RoleAssigneeType = 'ServicePrincipal'; RoleAssigneeName = 'exo-mail'; RoleAssignee = 'exo-mail'; CustomResourceScope = 'App-Postfaecher'; RecipientAdministrativeUnitScope = $null; Enabled = 'False' }
+}
 function Get-ApplicationAccessPolicy { }
 # Exchange liefert InScope als Text – "False" darf nicht als ja gelten
 function Test-ServicePrincipalAuthorization {
@@ -75,6 +79,7 @@ function Get-Recipient([string]$Filter, $ResultSize) {
         '{"id":10,"op":"testApp","args":{"identity":"sp-new","resource":"aussen@contoso.com"}}'
         '{"id":11,"op":"adminUnits","args":{}}'
         '{"id":12,"op":"adminUnitMembers","args":{"dn":"CN=au,DC=x","guid":"g-au"}}'
+        '{"id":13,"op":"run","script":"# nur Kommentare\n# nichts zu tun"}'
     )
     $script:RbacSource = Get-Content (Join-Path $PSScriptRoot '..\src\M365Manager\Assets\ps\rbac-host.ps1') -Raw
     $script:RbacJs = Get-Content (Join-Path $PSScriptRoot '..\src\M365Manager\Assets\rbac\rbac.js') -Raw
@@ -84,7 +89,7 @@ AfterAll { Remove-Item $script:Work -Recurse -Force -ErrorAction SilentlyContinu
 
 Describe 'RBAC-Hintergrund-PowerShell' {
     It 'beantwortet jede Anfrage genau einmal' {
-        $script:Replies.Count | Should -Be 12
+        $script:Replies.Count | Should -Be 13
     }
     It 'listet Verwaltungseinheiten aus Exchange (auch eine einzelne als Liste)' {
         $script:Replies[10] | Should -Match '"data":\[\{'
@@ -92,6 +97,9 @@ Describe 'RBAC-Hintergrund-PowerShell' {
         $u.displayName | Should -Be 'PM Alle'
         $u.id | Should -Be '11111111-2222-3333-4444-555555555555'
         $u.dn | Should -Be 'CN=au,DC=x'
+    }
+    It 'liefert bei einem Skript ohne Ausgabe einen leeren Text (nicht null)' {
+        $script:Replies[12] | Should -Match '"output":""'
     }
     It 'zeigt die Postfächer einer Verwaltungseinheit' {
         $r = $script:Replies[11] | ConvertFrom-Json
@@ -113,6 +121,18 @@ Describe 'RBAC-Hintergrund-PowerShell' {
         $mail = $r.data | Where-Object displayName -eq 'Mail-App'
         $mail.grants[0].permission | Should -Be 'Mail.Read'
         $mail.appId | Should -Be 'app-mail'
+        $au = $mail.rbac | Where-Object name -eq 'z-au'
+        $au.scopeType | Should -Be 'au'
+        $au.scope | Should -Be '8a74f903-029c-4b8a-8cd4-bbd96458fe89'
+        $au.enabled | Should -BeTrue
+        $sc = $mail.rbac | Where-Object name -eq 'z-scope'
+        $sc.scopeType | Should -Be 'custom'
+        $sc.scope | Should -Be 'App-Postfaecher'
+        $sc.enabled | Should -BeFalse
+    }
+    It 'Assistent: wechselt den Bereich vorhandener Rollen (neu anlegen, dann alte entfernen), statt sie zu überspringen' {
+        $script:RbacJs | Should -Match 'Remove-ManagementRoleAssignment -Identity '' \+ q\(r\.name\) \+ '' -Confirm:\$false'
+        $script:RbacJs | Should -Not -Match "bereits zugewiesen \('"
     }
     It 'wertet InScope "False" aus Exchange als nein (nicht als ja)' {
         $r = $script:Replies[9] | ConvertFrom-Json
